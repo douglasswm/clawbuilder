@@ -7,8 +7,8 @@ import {
   useRouter,
 } from "@tanstack/react-router"
 import appCss from "@workspace/ui/globals.css?url"
-import { getSupabaseBrowserClient } from "../lib/supabase.client"
-import { getServerSession } from "../lib/auth.server"
+import { getSupabaseBrowserClient } from "../lib/supabase.browser"
+import { getServerSession } from "../lib/auth"
 
 import type { RouterContext } from "../router"
 
