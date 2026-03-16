@@ -7,6 +7,8 @@ import {
   useRouter,
 } from "@tanstack/react-router"
 import appCss from "@workspace/ui/globals.css?url"
+import { getSupabaseBrowserClient } from "../lib/supabase.client"
+import { getServerSession } from "../lib/auth.server"
 
 import type { RouterContext } from "../router"
 
@@ -21,20 +23,10 @@ export const Route = createRootRouteWithContext<RouterContext>()({
   }),
   beforeLoad: async () => {
     if (typeof window === "undefined") {
-      // Server: read session from cookies
+      // Server: use server function (RPC bridge handles server-only imports)
       try {
-        const { getRequest } = await import("@tanstack/react-start/server")
-        const { getSupabaseServerClient } = await import("../lib/supabase.server")
-        const request = getRequest()
-        const { supabase } = getSupabaseServerClient(request)
-        const {
-          data: { session },
-        } = await supabase.auth.getSession()
-        return {
-          supabase,
-          session,
-          user: session?.user ?? null,
-        }
+        const { session, user } = await getServerSession()
+        return { supabase: undefined!, session, user }
       } catch (error) {
         console.error("SSR auth error:", error)
         return { supabase: undefined!, session: null, user: null }
@@ -42,7 +34,6 @@ export const Route = createRootRouteWithContext<RouterContext>()({
     } else {
       // Client: use browser client
       try {
-        const { getSupabaseBrowserClient } = await import("../lib/supabase.client")
         const supabase = getSupabaseBrowserClient()
         const {
           data: { session },
@@ -80,19 +71,15 @@ function RootComponent() {
   const router = useRouter()
 
   useEffect(() => {
-    let subscription: { unsubscribe: () => void } | undefined
-
-    // Lazy import to avoid SSR issues
-    import("../lib/supabase.client").then(({ getSupabaseBrowserClient }) => {
-      const supabase = getSupabaseBrowserClient()
-      const { data } = supabase.auth.onAuthStateChange(() => {
-        // Re-run all beforeLoad checks when auth state changes (including cross-tab)
-        router.invalidate()
-      })
-      subscription = data.subscription
+    const supabase = getSupabaseBrowserClient()
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(() => {
+      // Re-run all beforeLoad checks when auth state changes (including cross-tab)
+      router.invalidate()
     })
 
-    return () => subscription?.unsubscribe()
+    return () => subscription.unsubscribe()
   }, [router])
 
   return <Outlet />
