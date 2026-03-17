@@ -89,3 +89,5 @@ import { Button } from "@workspace/ui/components/button"
 | `pnpm lint` | Lint all packages |
 | `pnpm typecheck` | TypeScript check |
 | `pnpm format` | Format with Prettier |
+| `pnpm test:unit` | Run unit tests (Vitest) |
+| `pnpm test:e2e` | Run E2E tests (Playwright) |

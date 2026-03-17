@@ -2,17 +2,15 @@
 
 ## Authentication
 
-### E2E test infrastructure for auth flow
+### Supabase local emulator for integration tests
 
-**What:** Add Vitest + Playwright and test the full auth flow (sign-in, callback, auth guard, sign-out, multi-tab sync).
+**What:** Set up Supabase CLI local dev (`supabase start`) for integration tests that validate real JWT handling, cookie flows, and PKCE code exchange.
 
-**Why:** The auth module has no automated tests — regressions will only be caught manually.
-
-**Context:** Auth was added in the initial Google OAuth PR. Key flows to cover: login redirect, OAuth callback code exchange, `_authenticated` layout guard, sign-out + `router.invalidate()`, and cross-tab `onAuthStateChange` sync. TanStack Start's SSR `beforeLoad` may need special test setup.
+**Why:** Current E2E tests use mock sessions via `setSession()` which bypasses JWT validation and real cookie handling. Integration tests with a real Supabase instance catch a class of bugs mocks cannot.
 
 **Effort:** M
-**Priority:** P1
-**Depends on:** None
+**Priority:** P2
+**Depends on:** E2E test infrastructure (completed)
 
 ### Supabase RLS policies
 
@@ -41,3 +39,9 @@
 **Depends on:** None
 
 ## Completed
+
+### E2E test infrastructure for auth flow
+
+**What:** Add Vitest + Playwright and test the full auth flow (sign-in, callback, auth guard, sign-out, multi-tab sync).
+
+**Completed:** feat/google-oauth-auth (2026-03-17)
