@@ -7,6 +7,7 @@ import {
   useRouteContext,
   useRouter,
 } from "@tanstack/react-router"
+import { getSupabaseBrowserClient } from "../lib/supabase.browser"
 import { Button } from "@workspace/ui/components/button"
 import { Avatar, AvatarFallback, AvatarImage } from "@workspace/ui/components/avatar"
 import {
@@ -49,7 +50,7 @@ const navItems = [
 ]
 
 function AuthenticatedLayout() {
-  const { supabase, user } = useRouteContext({ from: "/_authenticated" })
+  const { user } = useRouteContext({ from: "/_authenticated" })
   const router = useRouter()
   const [signingOut, setSigningOut] = useState(false)
 
@@ -66,7 +67,7 @@ function AuthenticatedLayout() {
   async function handleSignOut() {
     setSigningOut(true)
     try {
-      await supabase.auth.signOut()
+      await getSupabaseBrowserClient().auth.signOut()
       router.invalidate()
     } catch (error) {
       console.error("Sign out error:", error)

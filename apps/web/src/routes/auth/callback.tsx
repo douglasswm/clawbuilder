@@ -1,6 +1,7 @@
 import { useEffect } from "react"
-import { createFileRoute, useNavigate, useRouteContext } from "@tanstack/react-router"
+import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { validateRedirect } from "../../lib/auth-utils"
+import { getSupabaseBrowserClient } from "../../lib/supabase.browser"
 
 export const Route = createFileRoute("/auth/callback")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -11,12 +12,12 @@ export const Route = createFileRoute("/auth/callback")({
 })
 
 function AuthCallbackPage() {
-  const { supabase } = useRouteContext({ from: "/auth/callback" })
   const { redirect: redirectParam, code } = Route.useSearch()
   const navigate = useNavigate()
 
   useEffect(() => {
     async function handleCallback() {
+      const supabase = getSupabaseBrowserClient()
       try {
         if (code) {
           const { error } = await supabase.auth.exchangeCodeForSession(code)
@@ -46,7 +47,7 @@ function AuthCallbackPage() {
     }
 
     handleCallback()
-  }, [supabase, code, redirectParam, navigate])
+  }, [code, redirectParam, navigate])
 
   return (
     <div className="flex min-h-svh items-center justify-center bg-[#f5f0eb]">

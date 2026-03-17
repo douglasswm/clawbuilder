@@ -1,5 +1,6 @@
 import { useState } from "react"
-import { createFileRoute, redirect, useRouteContext } from "@tanstack/react-router"
+import { createFileRoute, redirect } from "@tanstack/react-router"
+import { getSupabaseBrowserClient } from "../lib/supabase.browser"
 import { Button } from "@workspace/ui/components/button"
 import {
   Card,
@@ -23,7 +24,6 @@ export const Route = createFileRoute("/login")({
 })
 
 function LoginPage() {
-  const { supabase } = useRouteContext({ from: "/login" })
   const { redirect: redirectParam } = Route.useSearch()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -33,6 +33,7 @@ function LoginPage() {
     setError(null)
 
     try {
+      const supabase = getSupabaseBrowserClient()
       const redirectTo = validateRedirect(redirectParam)
       const { error: oauthError } = await supabase.auth.signInWithOAuth({
         provider: "google",
