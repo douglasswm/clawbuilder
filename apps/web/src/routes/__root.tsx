@@ -72,6 +72,12 @@ function RootComponent() {
 
   useEffect(() => {
     const supabase = getSupabaseBrowserClient()
+
+    if (import.meta.env.DEV) {
+      const w = window as Window & { __test_supabase__?: typeof supabase; __test_router__?: typeof router }
+      w.__test_supabase__ = supabase
+      w.__test_router__ = router
+    }
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(() => {
