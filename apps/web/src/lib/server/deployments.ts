@@ -1,10 +1,8 @@
 import { createServerFn } from '@tanstack/react-start';
 import { getAuthenticatedClient } from './auth-helpers';
-import { execClawmacdo, parseNdjson } from './clawmacdo';
-import { getDecryptedUserApiKeys, hasAnyApiKey } from './settings';
 import { validateDeploymentName, validateRegion, validateSize, validateModel } from '../validation';
 
-export const TERMINAL_STATUSES = new Set(['running', 'failed', 'destroyed'] as const);
+export const TERMINAL_STATUSES = new Set<Deployment['status']>(['running', 'failed', 'destroyed']);
 
 export function buildDoTokenEnv(): Record<string, string> {
   const env: Record<string, string> = {};
@@ -88,6 +86,9 @@ export const createDeployment = createServerFn({ method: 'POST' })
     if (!validateSize(size)) throw new Error(`Invalid size: ${size}`);
     if (!validateModel(primaryModel)) throw new Error(`Invalid model: ${primaryModel}`);
 
+    const { execClawmacdo } = await import('./clawmacdo');
+    const { getDecryptedUserApiKeys, hasAnyApiKey } = await import('./settings');
+
     // Pre-flight: require DO_TOKEN before inserting the row so we don't consume a name slot
     if (!process.env.DO_TOKEN) {
       throw new Error('DigitalOcean token is not configured. Contact your administrator.');
@@ -150,6 +151,14 @@ export const createDeployment = createServerFn({ method: 'POST' })
         status: 'failed',
         error_message: String(err),
       }).eq('id', deployment.id);
+      if (result?.sandboxDir || deployment.sandbox_dir) {
+        try {
+          const { rmSync } = await import('node:fs');
+          rmSync((result?.sandboxDir || deployment.sandbox_dir)!, { recursive: true, force: true });
+        } catch {
+          // Non-critical
+        }
+      }
       throw new Error(`CLI error: ${String(err)}`);
     }
 
@@ -167,6 +176,14 @@ export const createDeployment = createServerFn({ method: 'POST' })
         status: 'failed',
         error_message: result.stderr || 'Deploy command failed',
       }).eq('id', deployment.id);
+      if (result.sandboxDir) {
+        try {
+          const { rmSync } = await import('node:fs');
+          rmSync(result.sandboxDir, { recursive: true, force: true });
+        } catch {
+          // Non-critical
+        }
+      }
       throw new Error(result.stderr || 'Deploy command failed');
     }
 
@@ -184,6 +201,7 @@ export const createDeployment = createServerFn({ method: 'POST' })
 export const pollDeploymentStatus = createServerFn({ method: 'POST' })
   .inputValidator((data: { deploymentId: string }) => data)
   .handler(async (ctx) => {
+    const { execClawmacdo, parseNdjson } = await import('./clawmacdo');
     const { supabase, user } = await getAuthenticatedClient();
 
     const { data: deployment, error: fetchError } = await supabase
@@ -208,6 +226,14 @@ export const pollDeploymentStatus = createServerFn({ method: 'POST' })
     if (dep.status === 'provisioning' && Date.now() - updatedAt > 45 * 60 * 1_000) {
       const updates = { status: 'failed' as const, error_message: 'Deployment timed out after 45 minutes' };
       await supabase.from('deployments').update(updates).eq('id', dep.id);
+      if (dep.sandbox_dir) {
+        try {
+          const { rmSync } = await import('node:fs');
+          rmSync(dep.sandbox_dir, { recursive: true, force: true });
+        } catch {
+          // Non-critical
+        }
+      }
       return { ...dep, ...updates };
     }
 
@@ -289,6 +315,7 @@ export function normalizeStatus(rawStatus: string, currentStatus: string): strin
 export const destroyDeployment = createServerFn({ method: 'POST' })
   .inputValidator((data: { deploymentId: string }) => data)
   .handler(async (ctx) => {
+    const { execClawmacdo } = await import('./clawmacdo');
     const { supabase, user } = await getAuthenticatedClient();
 
     const { data: deployment } = await supabase

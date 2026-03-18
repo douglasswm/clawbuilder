@@ -56,7 +56,7 @@ export function execClawmacdo(args: string[], options: ExecOptions = {}): Promis
 
     const binaryPath = getBinaryPath();
     const env: NodeJS.ProcessEnv = {
-      ...process.env,
+      PATH: process.env.PATH,
       HOME: sandboxDir,
       NO_COLOR: '1',
       ...options.env,

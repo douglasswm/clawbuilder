@@ -1,6 +1,5 @@
 import { createServerFn } from '@tanstack/react-start';
 import { getAuthenticatedClient } from '../server/auth-helpers';
-import { encrypt, decrypt } from './credentials';
 
 // Shape returned to the client — masked versions, never plaintext
 export interface UserApiKeysMasked {
@@ -20,6 +19,7 @@ function maskKey(key: string | null | undefined): { has: boolean; masked?: strin
 
 /** Get the current user's API keys (masked for display). */
 export const getUserApiKeys = createServerFn({ method: 'GET' }).handler(async () => {
+  const { decrypt } = await import('./credentials');
   const { supabase, user } = await getAuthenticatedClient();
 
   const { data } = await supabase
@@ -28,9 +28,19 @@ export const getUserApiKeys = createServerFn({ method: 'GET' }).handler(async ()
     .eq('user_id', user.id)
     .maybeSingle();
 
-  const anthropic = maskKey(data?.anthropic_key_encrypted ? decrypt(data.anthropic_key_encrypted) : null);
-  const openai = maskKey(data?.openai_key_encrypted ? decrypt(data.openai_key_encrypted) : null);
-  const gemini = maskKey(data?.gemini_key_encrypted ? decrypt(data.gemini_key_encrypted) : null);
+  const safeDecryptMask = (encrypted: string | null | undefined): { has: boolean; masked?: string } => {
+    if (!encrypted) return { has: false };
+    try {
+      return maskKey(decrypt(encrypted));
+    } catch {
+      console.warn('Failed to decrypt API key — treating as missing');
+      return { has: false };
+    }
+  };
+
+  const anthropic = safeDecryptMask(data?.anthropic_key_encrypted);
+  const openai = safeDecryptMask(data?.openai_key_encrypted);
+  const gemini = safeDecryptMask(data?.gemini_key_encrypted);
 
   return {
     hasAnthropicKey: anthropic.has,
@@ -52,6 +62,7 @@ export interface SaveApiKeysInput {
 export const saveUserApiKeys = createServerFn({ method: 'POST' })
   .inputValidator((data: SaveApiKeysInput) => data)
   .handler(async (ctx) => {
+    const { encrypt } = await import('./credentials');
     const { supabase, user } = await getAuthenticatedClient();
     const { anthropicKey, openaiKey, geminiKey } = ctx.data;
 
@@ -96,6 +107,7 @@ export async function getDecryptedUserApiKeys(userId: string, supabase: ReturnTy
   openaiKey?: string;
   geminiKey?: string;
 }> {
+  const { decrypt } = await import('./credentials');
   const { data } = await supabase
     .from('user_api_keys')
     .select('anthropic_key_encrypted, openai_key_encrypted, gemini_key_encrypted')
@@ -104,9 +116,19 @@ export async function getDecryptedUserApiKeys(userId: string, supabase: ReturnTy
 
   if (!data) return {};
 
+  const safeDecrypt = (encrypted: string | null | undefined): string | undefined => {
+    if (!encrypted) return undefined;
+    try {
+      return decrypt(encrypted);
+    } catch {
+      console.warn('Failed to decrypt API key — returning undefined');
+      return undefined;
+    }
+  };
+
   return {
-    anthropicKey: data.anthropic_key_encrypted ? decrypt(data.anthropic_key_encrypted) : undefined,
-    openaiKey: data.openai_key_encrypted ? decrypt(data.openai_key_encrypted) : undefined,
-    geminiKey: data.gemini_key_encrypted ? decrypt(data.gemini_key_encrypted) : undefined,
+    anthropicKey: safeDecrypt(data.anthropic_key_encrypted),
+    openaiKey: safeDecrypt(data.openai_key_encrypted),
+    geminiKey: safeDecrypt(data.gemini_key_encrypted),
   };
 }
