@@ -29,12 +29,12 @@ function AuthCallbackPage() {
         }
 
         // Even without a code param, Supabase may have handled the session
-        // via hash fragments. Check if we have a session.
+        // via hash fragments. Check if we have a valid user.
         const {
-          data: { session },
-        } = await supabase.auth.getSession()
+          data: { user },
+        } = await supabase.auth.getUser()
 
-        if (session) {
+        if (user) {
           const redirectTo = validateRedirect(redirectParam)
           navigate({ to: redirectTo, replace: true })
         } else {

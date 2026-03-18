@@ -35,13 +35,12 @@ export const Route = createRootRouteWithContext<RouterContext>()({
       // Client: use browser client
       try {
         const supabase = getSupabaseBrowserClient()
-        const {
-          data: { session },
-        } = await supabase.auth.getSession()
+        const { data: { user } } = await supabase.auth.getUser()
+        const { data: { session } } = await supabase.auth.getSession()
         return {
           supabase,
           session,
-          user: session?.user ?? null,
+          user: user ?? null,
         }
       } catch (error) {
         console.error("Client auth error:", error)
@@ -51,6 +50,15 @@ export const Route = createRootRouteWithContext<RouterContext>()({
   },
   component: RootComponent,
   shellComponent: RootDocument,
+  notFoundComponent: () => (
+    <div className="flex min-h-svh items-center justify-center">
+      <div className="text-center">
+        <h1 className="text-4xl font-bold">404</h1>
+        <p className="mt-2 text-muted-foreground">Page not found</p>
+        <a href="/" className="mt-4 inline-block text-sm underline">Go home</a>
+      </div>
+    </div>
+  ),
 })
 
 function RootDocument({ children }: { children: React.ReactNode }) {

@@ -16,11 +16,11 @@ export async function getAuthenticatedClient(): Promise<AuthenticatedClient> {
   const request = getRequest();
   const { supabase, headers } = getSupabaseServerClient(request);
 
-  const { data: { session }, error } = await supabase.auth.getSession();
+  const { data: { user }, error } = await supabase.auth.getUser();
 
-  if (error || !session) {
+  if (error || !user) {
     throw new Response('Unauthorized', { status: 401 });
   }
 
-  return { supabase, user: session.user, headers };
+  return { supabase, user, headers };
 }
