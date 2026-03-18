@@ -12,17 +12,11 @@
 **Priority:** P2
 **Depends on:** E2E test infrastructure (completed)
 
-### Supabase RLS policies
+### ~~Supabase RLS policies~~ ✅ Completed
 
 **What:** Configure row-level security when database tables are added.
 
-**Why:** Without RLS, any authenticated user can read/write all rows via the anon key.
-
-**Context:** No data tables exist yet. When the first table is created, RLS must be enabled and policies written before shipping. The anon key is exposed client-side, so RLS is the primary data access control.
-
-**Effort:** S
-**Priority:** P1
-**Depends on:** First database table being created
+**Completed:** feat/clawmacdo-deploy (2026-03-18) — RLS enabled on `deployments` and `user_api_keys` tables with user-scoped policies.
 
 ## Infrastructure
 
@@ -37,6 +31,48 @@
 **Effort:** S
 **Priority:** P2
 **Depends on:** None
+
+## Deployments
+
+### Replace polling with Supabase Realtime
+
+**What:** Replace `setInterval` polling on the deployment detail page with a Supabase Realtime subscription on the `deployments` table.
+
+**Why:** Eliminates unnecessary CLI spawns on every poll interval; updates are instant instead of waiting up to 10 seconds.
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** Polling implementation (feat/clawmacdo-deploy)
+
+### Dashboard pagination
+
+**What:** Add cursor-based pagination for the deployments list on the dashboard.
+
+**Why:** Prevents slow loads when a user accumulates many deployments.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** Dashboard deployment list (feat/clawmacdo-deploy)
+
+### E2E tests for deploy wizard and management
+
+**What:** Playwright E2E tests covering the full wizard flow (configure → review → deploy), polling on the detail page, and the destroy confirmation dialog.
+
+**Why:** Unit tests miss UI integration issues; E2E catches the full request/response cycle.
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** feat/clawmacdo-deploy shipping
+
+### Multi-instance deployments
+
+**What:** Support 1–10 instances per deployment (split tables, extra wizard step, batched polling).
+
+**Why:** Power-user feature for running agent fleets from a single deployment config.
+
+**Effort:** L
+**Priority:** P3
+**Depends on:** V1 single-instance deployment (feat/clawmacdo-deploy)
 
 ## Completed
 
