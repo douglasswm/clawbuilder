@@ -44,6 +44,18 @@
 **Priority:** P2
 **Depends on:** Polling implementation (feat/clawmacdo-deploy)
 
+### Server-side rate limiting for deployment polling
+
+**What:** Add per-user rate limiting to the `pollDeploymentStatus` server function (minimum 5s between polls per deployment).
+
+**Why:** Each poll spawns a CLI subprocess. Without rate limiting, concurrent browser tabs or direct API calls can overwhelm the server with child processes.
+
+**Context:** Current 10s client-side interval is fine for single-user. When the app goes multi-tenant, server-side enforcement becomes necessary. Implementation options: in-memory `Map<deploymentId, lastPollTimestamp>` or Supabase-based tracking.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** Polling implementation (feat/clawmacdo-deploy)
+
 ### Dashboard pagination
 
 **What:** Add cursor-based pagination for the deployments list on the dashboard.
