@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { setCliExecutor, parseNdjson } from '../../src/lib/server/clawmacdo';
+import { normalizeStatus, buildDoTokenEnv } from '../../src/lib/server/deployments';
 import {
   validateDeploymentName,
   validateRegion,
@@ -47,6 +48,67 @@ describe('validation integration', () => {
 
   it('valid model passes', () => {
     expect(validateModel('anthropic')).toBe(true);
+  });
+});
+
+describe('normalizeStatus', () => {
+  it('maps "running" to "running"', () => {
+    expect(normalizeStatus('running', 'provisioning')).toBe('running');
+  });
+
+  it('maps "failed" to "failed"', () => {
+    expect(normalizeStatus('failed', 'provisioning')).toBe('failed');
+  });
+
+  it('maps "error" to "failed"', () => {
+    expect(normalizeStatus('error', 'provisioning')).toBe('failed');
+  });
+
+  it('maps "provisioning" to "provisioning"', () => {
+    expect(normalizeStatus('provisioning', 'pending')).toBe('provisioning');
+  });
+
+  it('maps "pending" to "provisioning"', () => {
+    expect(normalizeStatus('pending', 'pending')).toBe('provisioning');
+  });
+
+  it('maps "destroyed" to "destroyed"', () => {
+    expect(normalizeStatus('destroyed', 'destroying')).toBe('destroyed');
+  });
+
+  it('maps "destroying" to "destroying"', () => {
+    expect(normalizeStatus('destroying', 'running')).toBe('destroying');
+  });
+
+  it('falls back to currentStatus for unknown status', () => {
+    expect(normalizeStatus('some-unknown', 'provisioning')).toBe('provisioning');
+  });
+
+  it('is case-insensitive', () => {
+    expect(normalizeStatus('RUNNING', 'provisioning')).toBe('running');
+    expect(normalizeStatus('Failed', 'provisioning')).toBe('failed');
+    expect(normalizeStatus('Error', 'running')).toBe('failed');
+  });
+});
+
+describe('buildDoTokenEnv', () => {
+  const originalEnv = process.env;
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  it('returns DO_TOKEN when env var is set', () => {
+    process.env = { ...originalEnv, DO_TOKEN: 'dop_v1_test123' };
+    const result = buildDoTokenEnv();
+    expect(result).toEqual({ DO_TOKEN: 'dop_v1_test123' });
+  });
+
+  it('returns empty object when env var is not set', () => {
+    process.env = { ...originalEnv };
+    delete process.env.DO_TOKEN;
+    const result = buildDoTokenEnv();
+    expect(result).toEqual({});
   });
 });
 

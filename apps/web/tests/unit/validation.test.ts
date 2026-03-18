@@ -64,16 +64,19 @@ describe('validateDeploymentName', () => {
     expect(result.valid).toBe(false);
   });
 
-  // Note: the regex /^[a-z0-9-]{3,63}$/ allows hyphens at start/end.
-  // These test the actual regex behavior (valid by current regex).
-  it('allows a name starting with a hyphen (regex permits it)', () => {
+  it('returns invalid for a name starting with a hyphen', () => {
     const result = validateDeploymentName('-myagent');
-    expect(result.valid).toBe(true);
+    expect(result.valid).toBe(false);
   });
 
-  it('allows a name ending with a hyphen (regex permits it)', () => {
+  it('returns invalid for a name ending with a hyphen', () => {
     const result = validateDeploymentName('myagent-');
-    expect(result.valid).toBe(true);
+    expect(result.valid).toBe(false);
+  });
+
+  it('returns invalid for all hyphens', () => {
+    const result = validateDeploymentName('---');
+    expect(result.valid).toBe(false);
   });
 });
 

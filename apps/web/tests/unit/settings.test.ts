@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { encrypt, decrypt } from '../../src/lib/server/credentials';
-import { getDecryptedUserApiKeys } from '../../src/lib/server/settings';
+import { getDecryptedUserApiKeys, hasAnyApiKey } from '../../src/lib/server/settings';
 
 const TEST_KEY = 'a'.repeat(64);
 
@@ -78,6 +78,52 @@ describe('getDecryptedUserApiKeys', () => {
     expect(result.anthropicKey).toBeUndefined();
     expect(result.openaiKey).toBeUndefined();
     expect(result.geminiKey).toBeUndefined();
+  });
+});
+
+describe('hasAnyApiKey', () => {
+  it('returns true when anthropic key exists', async () => {
+    const mockSupabase = buildMockSupabase({
+      anthropic_key_encrypted: 'encrypted-value',
+      openai_key_encrypted: null,
+      gemini_key_encrypted: null,
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await hasAnyApiKey('user-1', mockSupabase as any);
+    expect(result).toBe(true);
+  });
+
+  it('returns true when all three keys exist', async () => {
+    const mockSupabase = buildMockSupabase({
+      anthropic_key_encrypted: 'enc-anthropic',
+      openai_key_encrypted: 'enc-openai',
+      gemini_key_encrypted: 'enc-gemini',
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await hasAnyApiKey('user-1', mockSupabase as any);
+    expect(result).toBe(true);
+  });
+
+  it('returns false when no row found (null data)', async () => {
+    const mockSupabase = buildMockSupabase(null);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await hasAnyApiKey('user-1', mockSupabase as any);
+    expect(result).toBe(false);
+  });
+
+  it('returns false when all key columns are null', async () => {
+    const mockSupabase = buildMockSupabase({
+      anthropic_key_encrypted: null,
+      openai_key_encrypted: null,
+      gemini_key_encrypted: null,
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await hasAnyApiKey('user-1', mockSupabase as any);
+    expect(result).toBe(false);
   });
 });
 
