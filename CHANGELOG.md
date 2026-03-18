@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.1.0] - 2026-03-18
+
+### Added
+- Platform-level default AI provider via `PLATFORM_DEFAULT_MODEL` and `BYTEPLUS_ARKMODEL_API_KEY` env vars
+- `byteplus-arkmodel` model type in validation constants and label maps
+- Migration to make `primary_model` column nullable for graceful degradation
+
+### Changed
+- Renamed `buildDoTokenEnv` to `buildCliBaseEnv` with BytePlus API key passthrough
+- Deployment card and detail page use `MODEL_LABELS` lookup instead of CSS capitalize
+- Platform model stored in DB and passed as `--primary-model` to CLI when set
+
+### Fixed
+- Model display shows correct label ("ArkModel (BytePlus)") instead of raw "byteplus-arkmodel"
+
 ## [0.2.0.0] - 2026-03-18
 
 ### Added
