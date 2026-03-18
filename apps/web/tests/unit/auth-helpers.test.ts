@@ -19,7 +19,7 @@ function setupAuthMock(session: unknown, error: unknown = null) {
   const mockGetSession = vi.fn().mockResolvedValue({ data: { session }, error });
   vi.mocked(getRequest).mockReturnValue(new Request('http://localhost/'));
   vi.mocked(getSupabaseServerClient).mockReturnValue({
-    supabase: { auth: { getSession: mockGetSession } } as ReturnType<typeof getSupabaseServerClient>['supabase'],
+    supabase: { auth: { getSession: mockGetSession } } as unknown as ReturnType<typeof getSupabaseServerClient>['supabase'],
     headers: mockHeaders,
   });
 }
