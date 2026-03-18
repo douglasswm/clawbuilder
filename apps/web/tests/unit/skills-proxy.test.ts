@@ -21,6 +21,69 @@ function mockFetchThrows(error: Error) {
   return vi.fn().mockRejectedValue(error);
 }
 
+describe('extractArray', () => {
+  it('returns raw array as-is', async () => {
+    const { extractArray } = await import('../../src/lib/server/skills');
+    const input = [{ slug: 'a', name: 'A' }];
+    expect(extractArray(input)).toEqual(input);
+  });
+
+  it('extracts from wrapped { data: [...] } object', async () => {
+    const { extractArray } = await import('../../src/lib/server/skills');
+    const arr = [{ slug: 'b', name: 'B' }];
+    expect(extractArray({ data: arr })).toEqual(arr);
+  });
+
+  it('extracts from wrapped { categories: [...] } object', async () => {
+    const { extractArray } = await import('../../src/lib/server/skills');
+    const arr = [{ slug: 'c', name: 'C' }];
+    expect(extractArray({ categories: arr })).toEqual(arr);
+  });
+
+  it('returns empty array for non-object input', async () => {
+    const { extractArray } = await import('../../src/lib/server/skills');
+    expect(extractArray('string')).toEqual([]);
+    expect(extractArray(42)).toEqual([]);
+  });
+
+  it('returns empty array for null', async () => {
+    const { extractArray } = await import('../../src/lib/server/skills');
+    expect(extractArray(null)).toEqual([]);
+  });
+
+  it('returns empty array for object with no array values', async () => {
+    const { extractArray } = await import('../../src/lib/server/skills');
+    expect(extractArray({ foo: 'bar' })).toEqual([]);
+  });
+});
+
+describe('getCategories (wrapped response)', () => {
+  it('returns array when API returns wrapped object', async () => {
+    const categories = [{ slug: 'ai', name: 'AI' }];
+    vi.stubGlobal('fetch', mockFetchSuccess({ categories }));
+    const { getCategories } = await import('../../src/lib/server/skills');
+    const result = await getCategories();
+    expect(result.data).toEqual(categories);
+  });
+});
+
+describe('searchSkills (wrapped response)', () => {
+  it('returns array when API returns wrapped object', async () => {
+    const skills = [{ slug: 's1', name: 'S1' }];
+    vi.stubGlobal('fetch', mockFetchSuccess({ data: skills }));
+    const { searchSkills } = await import('../../src/lib/server/skills');
+    const result = await searchSkills({ query: 'test' });
+    expect(result.data).toEqual(skills);
+  });
+
+  it('returns empty array when API returns non-array', async () => {
+    vi.stubGlobal('fetch', mockFetchSuccess('not an array'));
+    const { searchSkills } = await import('../../src/lib/server/skills');
+    const result = await searchSkills({ query: 'test' });
+    expect(result.data).toEqual([]);
+  });
+});
+
 describe('getCategories', () => {
   it('returns data on success', async () => {
     vi.stubGlobal('fetch', mockFetchSuccess([{ slug: 'ai', name: 'AI' }]));

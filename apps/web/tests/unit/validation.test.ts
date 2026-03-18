@@ -4,10 +4,14 @@ import {
   validateRegion,
   validateSize,
   validateModel,
+  generateDeploymentName,
   DEPLOYMENT_NAME_REGEX,
   REGIONS,
   SIZES,
   MODELS,
+  REGION_LABELS,
+  SIZE_LABELS,
+  MODEL_LABELS,
 } from '../../src/lib/validation';
 import type { Region, Size, Model } from '../../src/lib/validation';
 
@@ -155,6 +159,56 @@ describe('DEPLOYMENT_NAME_REGEX', () => {
 
   it('does not match more than 63 chars', () => {
     expect(DEPLOYMENT_NAME_REGEX.test('a'.repeat(64))).toBe(false);
+  });
+});
+
+describe('generateDeploymentName', () => {
+  it('generates a name matching DEPLOYMENT_NAME_REGEX', () => {
+    const name = generateDeploymentName();
+    expect(DEPLOYMENT_NAME_REGEX.test(name)).toBe(true);
+  });
+
+  it('uses persona slug as prefix when provided', () => {
+    const name = generateDeploymentName('customer-support');
+    expect(name.startsWith('customer-support-')).toBe(true);
+    expect(DEPLOYMENT_NAME_REGEX.test(name)).toBe(true);
+  });
+
+  it('generates random name without persona slug', () => {
+    const name = generateDeploymentName();
+    // Should be adjective-noun-number pattern
+    const parts = name.split('-');
+    expect(parts.length).toBe(3);
+  });
+
+  it('generates unique names across calls', () => {
+    const names = new Set(Array.from({ length: 20 }, () => generateDeploymentName()));
+    expect(names.size).toBeGreaterThan(1);
+  });
+
+  it('generates unique names with persona slug across calls', () => {
+    const names = new Set(Array.from({ length: 20 }, () => generateDeploymentName('test')));
+    expect(names.size).toBeGreaterThan(1);
+  });
+});
+
+describe('label maps', () => {
+  it('has a label for every region', () => {
+    for (const region of REGIONS) {
+      expect(REGION_LABELS[region]).toBeDefined();
+    }
+  });
+
+  it('has a label for every size', () => {
+    for (const size of SIZES) {
+      expect(SIZE_LABELS[size]).toBeDefined();
+    }
+  });
+
+  it('has a label for every model', () => {
+    for (const model of MODELS) {
+      expect(MODEL_LABELS[model]).toBeDefined();
+    }
   });
 });
 

@@ -14,6 +14,42 @@ export type Region = typeof REGIONS[number];
 export type Size = typeof SIZES[number];
 export type Model = typeof MODELS[number];
 
+export const REGION_LABELS: Record<string, string> = {
+  nyc1: 'New York 1', nyc3: 'New York 3', sfo3: 'San Francisco 3',
+  ams3: 'Amsterdam 3', sgp1: 'Singapore 1', lon1: 'London 1',
+  fra1: 'Frankfurt 1', blr1: 'Bangalore 1', tor1: 'Toronto 1',
+};
+
+export const SIZE_LABELS: Record<string, string> = {
+  's-1vcpu-1gb': '1 vCPU / 1 GB', 's-1vcpu-2gb': '1 vCPU / 2 GB',
+  's-2vcpu-2gb': '2 vCPU / 2 GB', 's-2vcpu-4gb': '2 vCPU / 4 GB',
+  's-4vcpu-8gb': '4 vCPU / 8 GB',
+};
+
+export const MODEL_LABELS: Record<string, string> = {
+  anthropic: 'Claude (Anthropic)', openai: 'GPT (OpenAI)', gemini: 'Gemini (Google)',
+};
+
+const ADJECTIVES = [
+  'brave', 'calm', 'eager', 'swift', 'bold', 'keen', 'wise', 'fair',
+  'warm', 'cool', 'sharp', 'prime', 'noble', 'vivid', 'lucid',
+];
+
+const NOUNS = [
+  'falcon', 'tiger', 'phoenix', 'lynx', 'raven', 'panda', 'otter',
+  'cobra', 'eagle', 'bison', 'cedar', 'spark', 'pulse', 'nexus', 'prism',
+];
+
+export function generateDeploymentName(personaSlug?: string): string {
+  const num = Math.floor(Math.random() * 90) + 10; // 10-99
+  if (personaSlug) {
+    return `${personaSlug}-${num}`;
+  }
+  const adj = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)];
+  const noun = NOUNS[Math.floor(Math.random() * NOUNS.length)];
+  return `${adj}-${noun}-${num}`;
+}
+
 export function validateDeploymentName(name: string): { valid: boolean; error?: string } {
   if (!name) return { valid: false, error: 'Name is required' };
   if (!DEPLOYMENT_NAME_REGEX.test(name)) {

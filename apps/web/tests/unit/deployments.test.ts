@@ -89,6 +89,22 @@ describe('normalizeStatus', () => {
     expect(normalizeStatus('Failed', 'provisioning')).toBe('failed');
     expect(normalizeStatus('Error', 'running')).toBe('failed');
   });
+
+  it('falls back to currentStatus when rawStatus is null or undefined', () => {
+    expect(normalizeStatus(null as unknown as string, 'running')).toBe('running');
+    expect(normalizeStatus(undefined as unknown as string, 'provisioning')).toBe('provisioning');
+    expect(normalizeStatus(undefined as unknown as string, 'failed')).toBe('failed');
+  });
+
+  it('handles mixed case variants correctly', () => {
+    expect(normalizeStatus('Running', 'pending')).toBe('running');
+    expect(normalizeStatus('FAILED', 'provisioning')).toBe('failed');
+    expect(normalizeStatus('ERROR', 'running')).toBe('failed');
+    expect(normalizeStatus('Provisioning', 'pending')).toBe('provisioning');
+    expect(normalizeStatus('Destroying', 'running')).toBe('destroying');
+    expect(normalizeStatus('DESTROYED', 'destroying')).toBe('destroyed');
+    expect(normalizeStatus('Pending', 'pending')).toBe('provisioning');
+  });
 });
 
 describe('buildDoTokenEnv', () => {
@@ -107,6 +123,12 @@ describe('buildDoTokenEnv', () => {
   it('returns empty object when env var is not set', () => {
     process.env = { ...originalEnv };
     delete process.env.DO_TOKEN;
+    const result = buildDoTokenEnv();
+    expect(result).toEqual({});
+  });
+
+  it('returns empty object when DO_TOKEN is an empty string', () => {
+    process.env = { ...originalEnv, DO_TOKEN: '' };
     const result = buildDoTokenEnv();
     expect(result).toEqual({});
   });
@@ -177,5 +199,42 @@ describe('parseNdjson handles deploy output', () => {
 
   it('returns empty array for empty stdout', () => {
     expect(parseNdjson('')).toEqual([]);
+  });
+
+  it('parses a realistic deployment lifecycle stream', () => {
+    const output = [
+      '{"status":"pending","step":0,"step_label":"Initializing deployment"}',
+      '{"status":"provisioning","step":1,"step_label":"Creating droplet"}',
+      '{"status":"provisioning","step":2,"step_label":"Configuring DNS"}',
+      '{"status":"provisioning","step":3,"step_label":"Installing dependencies"}',
+      '{"status":"provisioning","step":4,"step_label":"Starting services"}',
+      '{"status":"running","step":5,"step_label":"Deployment complete","ip_address":"203.0.113.42"}',
+    ].join('\n');
+
+    const result = parseNdjson(output) as Array<Record<string, unknown>>;
+    expect(result).toHaveLength(6);
+
+    // First event: pending initialization
+    expect(result[0]).toMatchObject({ status: 'pending', step: 0, step_label: 'Initializing deployment' });
+
+    // Intermediate events: provisioning with step progression
+    expect(result[1]).toMatchObject({ status: 'provisioning', step: 1 });
+    expect(result[2]).toMatchObject({ status: 'provisioning', step: 2 });
+    expect(result[3]).toMatchObject({ status: 'provisioning', step: 3 });
+    expect(result[4]).toMatchObject({ status: 'provisioning', step: 4 });
+
+    // Final event: running with ip_address
+    const last = result[result.length - 1];
+    expect(last).toMatchObject({
+      status: 'running',
+      step: 5,
+      step_label: 'Deployment complete',
+      ip_address: '203.0.113.42',
+    });
+
+    // Steps should be monotonically increasing
+    for (let i = 1; i < result.length; i++) {
+      expect(result[i].step).toBeGreaterThan(result[i - 1].step as number);
+    }
   });
 });

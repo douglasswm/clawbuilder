@@ -20,6 +20,28 @@ interface SkillsResult<T> {
   error?: string;
 }
 
+/**
+ * Safely extract an array from an API response that may be a raw array
+ * or a wrapped object like { data: [...] } or { categories: [...] }.
+ */
+export function extractArray<T>(raw: unknown): T[] {
+  if (Array.isArray(raw)) return raw as T[];
+  if (raw && typeof raw === 'object') {
+    for (const value of Object.values(raw as Record<string, unknown>)) {
+      if (Array.isArray(value)) {
+        if (process.env.NODE_ENV === 'development') {
+          console.warn('[skills] API returned wrapped object instead of array, normalizing');
+        }
+        return value as T[];
+      }
+    }
+  }
+  if (process.env.NODE_ENV === 'development') {
+    console.warn('[skills] API returned non-array response:', typeof raw);
+  }
+  return [];
+}
+
 // Simple in-memory cache for categories
 let categoriesCache: { data: Category[]; fetchedAt: number } | null = null;
 
@@ -40,7 +62,8 @@ export async function getCategories(): Promise<SkillsResult<Category[]>> {
   try {
     const res = await fetchWithTimeout(`${SKILLS_API_BASE}/api/categories`, FETCH_TIMEOUT_MS);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = (await res.json()) as Category[];
+    const raw = await res.json();
+    const data = extractArray<Category>(raw);
     categoriesCache = { data, fetchedAt: Date.now() };
     return { data };
   } catch {
@@ -61,8 +84,8 @@ export async function searchSkills(params: {
   try {
     const res = await fetchWithTimeout(url.toString(), FETCH_TIMEOUT_MS);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = (await res.json()) as Skill[];
-    return { data };
+    const raw = await res.json();
+    return { data: extractArray<Skill>(raw) };
   } catch {
     return { data: [], error: 'Skills catalog temporarily unavailable' };
   }
@@ -78,8 +101,8 @@ export async function getCategorySkills(params: {
   try {
     const res = await fetchWithTimeout(url.toString(), FETCH_TIMEOUT_MS);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = (await res.json()) as Skill[];
-    return { data };
+    const raw = await res.json();
+    return { data: extractArray<Skill>(raw) };
   } catch {
     return { data: [], error: 'Skills catalog temporarily unavailable' };
   }
