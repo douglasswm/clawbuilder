@@ -29,9 +29,6 @@ export function extractArray<T>(raw: unknown): T[] {
   if (raw && typeof raw === 'object') {
     for (const value of Object.values(raw as Record<string, unknown>)) {
       if (Array.isArray(value)) {
-        if (process.env.NODE_ENV === 'development') {
-          console.warn('[skills] API returned wrapped object instead of array, normalizing');
-        }
         return value as T[];
       }
     }

@@ -76,10 +76,10 @@ function SettingsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>AI API Keys</CardTitle>
+          <CardTitle>AI API Keys (Optional)</CardTitle>
           <CardDescription>
-            Your API keys are encrypted at rest and used when deploying agents. Enter a key to add
-            or update it.
+            Deployed agents authenticate with AI providers via subscription OAuth by default.
+            API keys are optional for advanced or direct API-based access. Keys are encrypted at rest.
           </CardDescription>
         </CardHeader>
         <CardContent>
