@@ -1,13 +1,15 @@
 import { createServerFn } from '@tanstack/react-start';
 import { getAuthenticatedClient } from './auth-helpers';
-import { validateDeploymentName, validateRegion, validateSize, validateModel } from '../validation';
+import { validateDeploymentName, validateRegion, validateSize } from '../validation';
 
 export const TERMINAL_STATUSES = new Set<Deployment['status']>(['running', 'failed', 'destroyed']);
 
-export function buildDoTokenEnv(): Record<string, string> {
+export function buildCliBaseEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   const doToken = process.env.DO_TOKEN;
   if (doToken) env['DO_TOKEN'] = doToken;
+  const byteplusKey = process.env.BYTEPLUS_ARKMODEL_API_KEY;
+  if (byteplusKey) env['BYTEPLUS_ARKMODEL_API_KEY'] = byteplusKey;
   return env;
 }
 
@@ -15,7 +17,6 @@ export interface CreateDeploymentInput {
   name: string;
   region: string;
   size: string;
-  primaryModel: string;
   personaSlug?: string;
   personaName?: string;
 }
@@ -28,7 +29,7 @@ export interface Deployment {
   provider: string;
   region: string;
   size: string;
-  primary_model: string;
+  primary_model: string | null;
   cli_deploy_id?: string;
   ip_address?: string;
   persona_slug?: string;
@@ -77,27 +78,24 @@ export const createDeployment = createServerFn({ method: 'POST' })
   .inputValidator((data: CreateDeploymentInput) => data)
   .handler(async (ctx) => {
     const { supabase, user } = await getAuthenticatedClient();
-    const { name, region, size, primaryModel, personaSlug, personaName } = ctx.data;
+    const { name, region, size, personaSlug, personaName } = ctx.data;
 
     // Server-side validation
     const nameValidation = validateDeploymentName(name);
     if (!nameValidation.valid) throw new Error(nameValidation.error);
     if (!validateRegion(region)) throw new Error(`Invalid region: ${region}`);
     if (!validateSize(size)) throw new Error(`Invalid size: ${size}`);
-    if (!validateModel(primaryModel)) throw new Error(`Invalid model: ${primaryModel}`);
 
     const { execClawmacdo } = await import('./clawmacdo');
-    const { getDecryptedUserApiKeys, hasAnyApiKey } = await import('./settings');
+    const { getDecryptedUserApiKeys } = await import('./settings');
 
     // Pre-flight: require DO_TOKEN before inserting the row so we don't consume a name slot
     if (!process.env.DO_TOKEN) {
       throw new Error('DigitalOcean token is not configured. Contact your administrator.');
     }
 
-    // Check user has API keys (cheap existence check, no decryption)
-    if (!await hasAnyApiKey(user.id, supabase)) {
-      throw new Error('Please configure your AI API keys in Settings before deploying.');
-    }
+    // Resolve platform default model from env
+    const platformModel = process.env.PLATFORM_DEFAULT_MODEL || null;
 
     // Insert deployment row (unique constraint prevents double-submit)
     const { data: deployment, error: insertError } = await supabase
@@ -109,7 +107,7 @@ export const createDeployment = createServerFn({ method: 'POST' })
         provider: 'digitalocean',
         region,
         size,
-        primary_model: primaryModel,
+        primary_model: platformModel,
         persona_slug: personaSlug ?? null,
         persona_name: personaName ?? null,
       })
@@ -130,14 +128,16 @@ export const createDeployment = createServerFn({ method: 'POST' })
       '--region', region,
       '--size', size,
       '--hostname', name,
-      '--primary-model', primaryModel,
       '--detach',
       '--json',
     ];
+    if (platformModel) {
+      cliArgs.push('--primary-model', platformModel);
+    }
 
     // Decrypt keys for CLI (after insert succeeds, so we only decrypt when needed)
     const userKeys = await getDecryptedUserApiKeys(user.id, supabase);
-    const cliEnv = buildDoTokenEnv();
+    const cliEnv = buildCliBaseEnv();
     if (userKeys.anthropicKey) cliEnv['ANTHROPIC_API_KEY'] = userKeys.anthropicKey;
     if (userKeys.openaiKey) cliEnv['OPENAI_API_KEY'] = userKeys.openaiKey;
     if (userKeys.geminiKey) cliEnv['GEMINI_API_KEY'] = userKeys.geminiKey;
@@ -243,7 +243,7 @@ export const pollDeploymentStatus = createServerFn({ method: 'POST' })
     }
 
     // Run clawmacdo track
-    const cliEnv = buildDoTokenEnv();
+    const cliEnv = buildCliBaseEnv();
 
     const trackResult = await execClawmacdo(
       ['track', dep.cli_deploy_id, '--json'],
@@ -340,7 +340,7 @@ export const destroyDeployment = createServerFn({ method: 'POST' })
       throw new Error('Deployment is already being destroyed or has been destroyed.');
     }
 
-    const cliEnv = buildDoTokenEnv();
+    const cliEnv = buildCliBaseEnv();
 
     const result = await execClawmacdo(
       ['destroy', '--provider', 'digitalocean', '--name', dep.name, '--yes'],

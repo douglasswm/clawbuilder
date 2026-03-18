@@ -8,7 +8,7 @@ export const SIZES = [
   's-1vcpu-1gb', 's-1vcpu-2gb', 's-2vcpu-2gb', 's-2vcpu-4gb', 's-4vcpu-8gb'
 ] as const;
 
-export const MODELS = ['anthropic', 'openai', 'gemini'] as const;
+export const MODELS = ['anthropic', 'openai', 'gemini', 'byteplus-arkmodel'] as const;
 
 export type Region = typeof REGIONS[number];
 export type Size = typeof SIZES[number];
@@ -28,6 +28,7 @@ export const SIZE_LABELS: Record<string, string> = {
 
 export const MODEL_LABELS: Record<string, string> = {
   anthropic: 'Claude (Anthropic)', openai: 'GPT (OpenAI)', gemini: 'Gemini (Google)',
+  'byteplus-arkmodel': 'ArkModel (BytePlus)',
 };
 
 const ADJECTIVES = [
