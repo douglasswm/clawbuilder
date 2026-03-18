@@ -63,9 +63,8 @@ export function execClawmacdo(args: string[], options: ExecOptions = {}): Promis
     };
 
     const startMs = Date.now();
-    // Redact credential env vars in logs
-    const safeArgs = args.join(' ');
-    console.log(`[clawmacdo] Spawning: clawmacdo ${safeArgs}`);
+    const logArgs = args.join(' ');
+    console.log(`[clawmacdo] Spawning: clawmacdo ${logArgs}`);
 
     const proc = spawn(binaryPath, args, {
       env,
