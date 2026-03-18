@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { useState, useEffect } from 'react';
-import { getUserApiKeys, saveUserApiKeys } from '../../lib/server/settings';
+import { getUserApiKeys, saveUserApiKeys, type UserApiKeysMasked } from '../../lib/server/settings';
 import { Input } from '@workspace/ui/components/input';
 import { Label } from '@workspace/ui/components/label';
 import { Button } from '@workspace/ui/components/button';
@@ -17,14 +17,7 @@ export const Route = createFileRoute('/_authenticated/settings')({
 });
 
 function SettingsPage() {
-  const [keys, setKeys] = useState<{
-    hasAnthropicKey: boolean;
-    hasOpenaiKey: boolean;
-    hasGeminiKey: boolean;
-    anthropicKeyMasked?: string;
-    openaiKeyMasked?: string;
-    geminiKeyMasked?: string;
-  } | null>(null);
+  const [keys, setKeys] = useState<UserApiKeysMasked | null>(null);
 
   const [anthropicKey, setAnthropicKey] = useState('');
   const [openaiKey, setOpenaiKey] = useState('');

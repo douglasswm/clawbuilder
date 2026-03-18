@@ -1,4 +1,4 @@
-export const DEPLOYMENT_NAME_REGEX = /^[a-z0-9-]{3,63}$/;
+export const DEPLOYMENT_NAME_REGEX = /^[a-z0-9]([a-z0-9-]{1,61}[a-z0-9])?$/;
 
 export const REGIONS = [
   'nyc1', 'nyc3', 'sfo3', 'ams3', 'sgp1', 'lon1', 'fra1', 'blr1', 'tor1'
@@ -17,7 +17,7 @@ export type Model = typeof MODELS[number];
 export function validateDeploymentName(name: string): { valid: boolean; error?: string } {
   if (!name) return { valid: false, error: 'Name is required' };
   if (!DEPLOYMENT_NAME_REGEX.test(name)) {
-    return { valid: false, error: 'Name must be 3-63 characters: lowercase letters, numbers, hyphens only' };
+    return { valid: false, error: 'Name must be 3-63 characters: lowercase letters, numbers, hyphens only. Must start and end with a letter or number.' };
   }
   return { valid: true };
 }

@@ -78,6 +78,18 @@ export const saveUserApiKeys = createServerFn({ method: 'POST' })
     return { success: true };
   });
 
+/** Check if user has at least one API key configured, without decrypting. */
+export async function hasAnyApiKey(userId: string, supabase: ReturnType<typeof import('../supabase.server').getSupabaseServerClient>['supabase']): Promise<boolean> {
+  const { data } = await supabase
+    .from('user_api_keys')
+    .select('anthropic_key_encrypted, openai_key_encrypted, gemini_key_encrypted')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (!data) return false;
+  return !!(data.anthropic_key_encrypted || data.openai_key_encrypted || data.gemini_key_encrypted);
+}
+
 /** Internal server-side only: get decrypted API keys for CLI spawn. Never expose to client. */
 export async function getDecryptedUserApiKeys(userId: string, supabase: ReturnType<typeof import('../supabase.server').getSupabaseServerClient>['supabase']): Promise<{
   anthropicKey?: string;

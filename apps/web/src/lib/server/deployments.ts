@@ -1,8 +1,17 @@
 import { createServerFn } from '@tanstack/react-start';
 import { getAuthenticatedClient } from './auth-helpers';
 import { execClawmacdo, parseNdjson } from './clawmacdo';
-import { getDecryptedUserApiKeys } from './settings';
+import { getDecryptedUserApiKeys, hasAnyApiKey } from './settings';
 import { validateDeploymentName, validateRegion, validateSize, validateModel } from '../validation';
+
+export const TERMINAL_STATUSES = new Set(['running', 'failed', 'destroyed'] as const);
+
+export function buildDoTokenEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  const doToken = process.env.DO_TOKEN;
+  if (doToken) env['DO_TOKEN'] = doToken;
+  return env;
+}
 
 export interface CreateDeploymentInput {
   name: string;
@@ -84,9 +93,8 @@ export const createDeployment = createServerFn({ method: 'POST' })
       throw new Error('DigitalOcean token is not configured. Contact your administrator.');
     }
 
-    // Check user has API keys
-    const userKeys = await getDecryptedUserApiKeys(user.id, supabase);
-    if (!userKeys.anthropicKey && !userKeys.openaiKey && !userKeys.geminiKey) {
+    // Check user has API keys (cheap existence check, no decryption)
+    if (!await hasAnyApiKey(user.id, supabase)) {
       throw new Error('Please configure your AI API keys in Settings before deploying.');
     }
 
@@ -126,10 +134,9 @@ export const createDeployment = createServerFn({ method: 'POST' })
       '--json',
     ];
 
-    // Build env vars for CLI (credentials via env, never as CLI args)
-    const cliEnv: Record<string, string> = {};
-    const doToken = process.env.DO_TOKEN;
-    if (doToken) cliEnv['DO_TOKEN'] = doToken;
+    // Decrypt keys for CLI (after insert succeeds, so we only decrypt when needed)
+    const userKeys = await getDecryptedUserApiKeys(user.id, supabase);
+    const cliEnv = buildDoTokenEnv();
     if (userKeys.anthropicKey) cliEnv['ANTHROPIC_API_KEY'] = userKeys.anthropicKey;
     if (userKeys.openaiKey) cliEnv['OPENAI_API_KEY'] = userKeys.openaiKey;
     if (userKeys.geminiKey) cliEnv['GEMINI_API_KEY'] = userKeys.geminiKey;
@@ -190,10 +197,9 @@ export const pollDeploymentStatus = createServerFn({ method: 'POST' })
     if (!deployment) throw new Response('Not found', { status: 404 });
 
     const dep = deployment as Deployment;
-    const terminalStatuses = ['running', 'failed', 'destroyed'];
 
     // If already terminal, return as-is
-    if (terminalStatuses.includes(dep.status)) {
+    if (TERMINAL_STATUSES.has(dep.status)) {
       return dep;
     }
 
@@ -211,9 +217,7 @@ export const pollDeploymentStatus = createServerFn({ method: 'POST' })
     }
 
     // Run clawmacdo track
-    const doToken = process.env.DO_TOKEN;
-    const cliEnv: Record<string, string> = {};
-    if (doToken) cliEnv['DO_TOKEN'] = doToken;
+    const cliEnv = buildDoTokenEnv();
 
     const trackResult = await execClawmacdo(
       ['track', dep.cli_deploy_id, '--json'],
@@ -243,7 +247,7 @@ export const pollDeploymentStatus = createServerFn({ method: 'POST' })
 
     // If newly running and has persona: claim the push atomically before spawning CLI
     // to prevent duplicate pushes from concurrent poll calls
-    if (normalizedStatus === 'running' && dep.persona_slug && !dep.persona_pushed) {
+    if (normalizedStatus === 'running' && dep.persona_slug && !dep.persona_pushed && !dep.persona_error) {
       const { count } = await supabase
         .from('deployments')
         .update({ persona_pushed: true }, { count: 'exact' })
@@ -268,7 +272,7 @@ export const pollDeploymentStatus = createServerFn({ method: 'POST' })
     return { ...dep, ...updates };
   });
 
-function normalizeStatus(rawStatus: string, currentStatus: string): string {
+export function normalizeStatus(rawStatus: string, currentStatus: string): string {
   const statusMap: Record<string, string> = {
     'running': 'running',
     'failed': 'failed',
@@ -309,9 +313,7 @@ export const destroyDeployment = createServerFn({ method: 'POST' })
       throw new Error('Deployment is already being destroyed or has been destroyed.');
     }
 
-    const doToken = process.env.DO_TOKEN;
-    const cliEnv: Record<string, string> = {};
-    if (doToken) cliEnv['DO_TOKEN'] = doToken;
+    const cliEnv = buildDoTokenEnv();
 
     const result = await execClawmacdo(
       ['destroy', '--provider', 'digitalocean', '--name', dep.name, '--yes'],

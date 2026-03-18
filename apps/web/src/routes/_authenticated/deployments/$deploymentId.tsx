@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { getDeploymentDetail, pollDeploymentStatus, destroyDeployment } from '../../../lib/server/deployments';
+import { getDeploymentDetail, pollDeploymentStatus, destroyDeployment, TERMINAL_STATUSES } from '../../../lib/server/deployments';
 import { StatusBadge } from '../../../components/status-badge';
 import { Progress } from '@workspace/ui/components/progress';
 import { Button } from '@workspace/ui/components/button';
@@ -17,8 +17,6 @@ import type { Deployment } from '../../../lib/server/deployments';
 export const Route = createFileRoute('/_authenticated/deployments/$deploymentId')({
   component: DeploymentDetailPage,
 });
-
-const TERMINAL_STATUSES = new Set(['running', 'failed', 'destroyed']);
 
 function DeploymentDetailPage() {
   const { deploymentId } = Route.useParams();
@@ -45,7 +43,16 @@ function DeploymentDetailPage() {
   const poll = useCallback(async () => {
     try {
       const dep = await pollDeploymentStatus({ data: { deploymentId } });
-      setDeployment(dep as Deployment);
+      setDeployment((prev) => {
+        if (!prev) return dep as Deployment;
+        const next = dep as Deployment;
+        if (prev.status === next.status && prev.current_step === next.current_step &&
+            prev.ip_address === next.ip_address && prev.persona_pushed === next.persona_pushed &&
+            prev.error_message === next.error_message && prev.step_label === next.step_label) {
+          return prev;
+        }
+        return next;
+      });
       if (TERMINAL_STATUSES.has(dep.status)) {
         if (pollingRef.current) {
           clearInterval(pollingRef.current);
