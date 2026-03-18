@@ -1,0 +1,100 @@
+import { createServerFn } from '@tanstack/react-start';
+import { getAuthenticatedClient } from '../server/auth-helpers';
+import { encrypt, decrypt } from './credentials';
+
+// Shape returned to the client — masked versions, never plaintext
+export interface UserApiKeysMasked {
+  hasAnthropicKey: boolean;
+  hasOpenaiKey: boolean;
+  hasGeminiKey: boolean;
+  anthropicKeyMasked?: string; // e.g. "****1234"
+  openaiKeyMasked?: string;
+  geminiKeyMasked?: string;
+}
+
+function maskKey(key: string | null | undefined): { has: boolean; masked?: string } {
+  if (!key) return { has: false };
+  const last4 = key.slice(-4);
+  return { has: true, masked: `****${last4}` };
+}
+
+/** Get the current user's API keys (masked for display). */
+export const getUserApiKeys = createServerFn({ method: 'GET' }).handler(async () => {
+  const { supabase, user } = await getAuthenticatedClient();
+
+  const { data } = await supabase
+    .from('user_api_keys')
+    .select('anthropic_key_encrypted, openai_key_encrypted, gemini_key_encrypted')
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  const anthropic = maskKey(data?.anthropic_key_encrypted ? decrypt(data.anthropic_key_encrypted) : null);
+  const openai = maskKey(data?.openai_key_encrypted ? decrypt(data.openai_key_encrypted) : null);
+  const gemini = maskKey(data?.gemini_key_encrypted ? decrypt(data.gemini_key_encrypted) : null);
+
+  return {
+    hasAnthropicKey: anthropic.has,
+    hasOpenaiKey: openai.has,
+    hasGeminiKey: gemini.has,
+    anthropicKeyMasked: anthropic.masked,
+    openaiKeyMasked: openai.masked,
+    geminiKeyMasked: gemini.masked,
+  } satisfies UserApiKeysMasked;
+});
+
+export interface SaveApiKeysInput {
+  anthropicKey?: string;
+  openaiKey?: string;
+  geminiKey?: string;
+}
+
+/** Save/update user AI API keys (encrypts non-empty values, upserts). */
+export const saveUserApiKeys = createServerFn({ method: 'POST' })
+  .inputValidator((data: SaveApiKeysInput) => data)
+  .handler(async (ctx) => {
+    const { supabase, user } = await getAuthenticatedClient();
+    const { anthropicKey, openaiKey, geminiKey } = ctx.data;
+
+    const updates: Record<string, string | null> = {};
+    if (anthropicKey !== undefined) {
+      updates.anthropic_key_encrypted = anthropicKey.trim() ? encrypt(anthropicKey.trim()) : null;
+    }
+    if (openaiKey !== undefined) {
+      updates.openai_key_encrypted = openaiKey.trim() ? encrypt(openaiKey.trim()) : null;
+    }
+    if (geminiKey !== undefined) {
+      updates.gemini_key_encrypted = geminiKey.trim() ? encrypt(geminiKey.trim()) : null;
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return { success: true };
+    }
+
+    const { error } = await supabase
+      .from('user_api_keys')
+      .upsert({ user_id: user.id, ...updates }, { onConflict: 'user_id' });
+
+    if (error) throw new Error(error.message);
+    return { success: true };
+  });
+
+/** Internal server-side only: get decrypted API keys for CLI spawn. Never expose to client. */
+export async function getDecryptedUserApiKeys(userId: string, supabase: ReturnType<typeof import('../supabase.server').getSupabaseServerClient>['supabase']): Promise<{
+  anthropicKey?: string;
+  openaiKey?: string;
+  geminiKey?: string;
+}> {
+  const { data } = await supabase
+    .from('user_api_keys')
+    .select('anthropic_key_encrypted, openai_key_encrypted, gemini_key_encrypted')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (!data) return {};
+
+  return {
+    anthropicKey: data.anthropic_key_encrypted ? decrypt(data.anthropic_key_encrypted) : undefined,
+    openaiKey: data.openai_key_encrypted ? decrypt(data.openai_key_encrypted) : undefined,
+    geminiKey: data.gemini_key_encrypted ? decrypt(data.gemini_key_encrypted) : undefined,
+  };
+}
