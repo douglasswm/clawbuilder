@@ -1,6 +1,7 @@
 import { Link } from '@tanstack/react-router';
 import { Card, CardContent, CardHeader, CardTitle } from '@workspace/ui/components/card';
 import { StatusBadge } from './status-badge';
+import { MODEL_LABELS } from '../lib/validation';
 import type { Deployment } from '../lib/server/deployments';
 
 interface DeploymentCardProps {
@@ -21,7 +22,7 @@ export function DeploymentCard({ deployment }: DeploymentCardProps) {
           <div className="flex gap-4">
             <span>{deployment.region}</span>
             <span>{deployment.size}</span>
-            <span className="capitalize">{deployment.primary_model}</span>
+            {deployment.primary_model && <span>{MODEL_LABELS[deployment.primary_model] ?? deployment.primary_model}</span>}
           </div>
           {deployment.persona_name && (
             <div>Persona: <span className="text-foreground">{deployment.persona_name}</span></div>

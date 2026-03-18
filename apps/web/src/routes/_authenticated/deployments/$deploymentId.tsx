@@ -12,6 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@workspace/ui/components/dialog';
+import { MODEL_LABELS } from '../../../lib/validation';
 import type { Deployment } from '../../../lib/server/deployments';
 
 export const Route = createFileRoute('/_authenticated/deployments/$deploymentId')({
@@ -172,10 +173,12 @@ function DeploymentDetailPage() {
           <p className="text-muted-foreground">Size</p>
           <p>{deployment.size}</p>
         </div>
-        <div>
-          <p className="text-muted-foreground">Model</p>
-          <p className="capitalize">{deployment.primary_model}</p>
-        </div>
+        {deployment.primary_model && (
+          <div>
+            <p className="text-muted-foreground">Model</p>
+            <p>{MODEL_LABELS[deployment.primary_model] ?? deployment.primary_model}</p>
+          </div>
+        )}
         {deployment.ip_address && (
           <div>
             <p className="text-muted-foreground">IP Address</p>
