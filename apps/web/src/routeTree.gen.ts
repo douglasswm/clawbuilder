@@ -15,6 +15,10 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthCallbackRouteImport } from './routes/auth/callback'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
 import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
+import { Route as AuthenticatedDeployRouteImport } from './routes/_authenticated/deploy'
+import { Route as AuthenticatedDeployIndexRouteImport } from './routes/_authenticated/deploy/index'
+import { Route as AuthenticatedDeployReviewRouteImport } from './routes/_authenticated/deploy/review'
+import { Route as AuthenticatedDeploymentsDeploymentIdRouteImport } from './routes/_authenticated/deployments/$deploymentId'
 
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
@@ -45,12 +49,36 @@ const AuthenticatedSettingsRoute = AuthenticatedSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const AuthenticatedDeployRoute = AuthenticatedDeployRouteImport.update({
+  id: '/deploy',
+  path: '/deploy',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedDeployIndexRoute = AuthenticatedDeployIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AuthenticatedDeployRoute,
+} as any)
+const AuthenticatedDeployReviewRoute = AuthenticatedDeployReviewRouteImport.update({
+  id: '/review',
+  path: '/review',
+  getParentRoute: () => AuthenticatedDeployRoute,
+} as any)
+const AuthenticatedDeploymentsDeploymentIdRoute = AuthenticatedDeploymentsDeploymentIdRouteImport.update({
+  id: '/deployments/$deploymentId',
+  path: '/deployments/$deploymentId',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/settings': typeof AuthenticatedSettingsRoute
+  '/deploy': typeof AuthenticatedDeployRouteWithChildren
+  '/deploy/': typeof AuthenticatedDeployIndexRoute
+  '/deploy/review': typeof AuthenticatedDeployReviewRoute
+  '/deployments/$deploymentId': typeof AuthenticatedDeploymentsDeploymentIdRoute
   '/auth/callback': typeof AuthCallbackRoute
 }
 export interface FileRoutesByTo {
@@ -58,6 +86,9 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/settings': typeof AuthenticatedSettingsRoute
+  '/deploy': typeof AuthenticatedDeployIndexRoute
+  '/deploy/review': typeof AuthenticatedDeployReviewRoute
+  '/deployments/$deploymentId': typeof AuthenticatedDeploymentsDeploymentIdRoute
   '/auth/callback': typeof AuthCallbackRoute
 }
 export interface FileRoutesById {
@@ -67,13 +98,17 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
   '/_authenticated/settings': typeof AuthenticatedSettingsRoute
+  '/_authenticated/deploy': typeof AuthenticatedDeployRouteWithChildren
+  '/_authenticated/deploy/': typeof AuthenticatedDeployIndexRoute
+  '/_authenticated/deploy/review': typeof AuthenticatedDeployReviewRoute
+  '/_authenticated/deployments/$deploymentId': typeof AuthenticatedDeploymentsDeploymentIdRoute
   '/auth/callback': typeof AuthCallbackRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/login' | '/dashboard' | '/settings' | '/auth/callback'
+  fullPaths: '/' | '/login' | '/dashboard' | '/settings' | '/deploy' | '/deploy/' | '/deploy/review' | '/deployments/$deploymentId' | '/auth/callback'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/login' | '/dashboard' | '/settings' | '/auth/callback'
+  to: '/' | '/login' | '/dashboard' | '/settings' | '/deploy' | '/deploy/review' | '/deployments/$deploymentId' | '/auth/callback'
   id:
     | '__root__'
     | '/'
@@ -81,6 +116,10 @@ export interface FileRouteTypes {
     | '/login'
     | '/_authenticated/dashboard'
     | '/_authenticated/settings'
+    | '/_authenticated/deploy'
+    | '/_authenticated/deploy/'
+    | '/_authenticated/deploy/review'
+    | '/_authenticated/deployments/$deploymentId'
     | '/auth/callback'
   fileRoutesById: FileRoutesById
 }
@@ -135,17 +174,63 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedSettingsRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/deploy': {
+      id: '/_authenticated/deploy'
+      path: '/deploy'
+      fullPath: '/deploy'
+      preLoaderRoute: typeof AuthenticatedDeployRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/deploy/': {
+      id: '/_authenticated/deploy/'
+      path: '/'
+      fullPath: '/deploy/'
+      preLoaderRoute: typeof AuthenticatedDeployIndexRouteImport
+      parentRoute: typeof AuthenticatedDeployRoute
+    }
+    '/_authenticated/deploy/review': {
+      id: '/_authenticated/deploy/review'
+      path: '/review'
+      fullPath: '/deploy/review'
+      preLoaderRoute: typeof AuthenticatedDeployReviewRouteImport
+      parentRoute: typeof AuthenticatedDeployRoute
+    }
+    '/_authenticated/deployments/$deploymentId': {
+      id: '/_authenticated/deployments/$deploymentId'
+      path: '/deployments/$deploymentId'
+      fullPath: '/deployments/$deploymentId'
+      preLoaderRoute: typeof AuthenticatedDeploymentsDeploymentIdRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
   }
 }
+
+interface AuthenticatedDeployRouteChildren {
+  AuthenticatedDeployIndexRoute: typeof AuthenticatedDeployIndexRoute
+  AuthenticatedDeployReviewRoute: typeof AuthenticatedDeployReviewRoute
+}
+
+const AuthenticatedDeployRouteChildren: AuthenticatedDeployRouteChildren = {
+  AuthenticatedDeployIndexRoute: AuthenticatedDeployIndexRoute,
+  AuthenticatedDeployReviewRoute: AuthenticatedDeployReviewRoute,
+}
+
+const AuthenticatedDeployRouteWithChildren = AuthenticatedDeployRoute._addFileChildren(
+  AuthenticatedDeployRouteChildren,
+)
 
 interface AuthenticatedRouteChildren {
   AuthenticatedDashboardRoute: typeof AuthenticatedDashboardRoute
   AuthenticatedSettingsRoute: typeof AuthenticatedSettingsRoute
+  AuthenticatedDeployRoute: typeof AuthenticatedDeployRouteWithChildren
+  AuthenticatedDeploymentsDeploymentIdRoute: typeof AuthenticatedDeploymentsDeploymentIdRoute
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedDashboardRoute: AuthenticatedDashboardRoute,
   AuthenticatedSettingsRoute: AuthenticatedSettingsRoute,
+  AuthenticatedDeployRoute: AuthenticatedDeployRouteWithChildren,
+  AuthenticatedDeploymentsDeploymentIdRoute: AuthenticatedDeploymentsDeploymentIdRoute,
 }
 
 const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(
