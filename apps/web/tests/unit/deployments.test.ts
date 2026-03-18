@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { setCliExecutor, parseNdjson } from '../../src/lib/server/clawmacdo';
-import { normalizeStatus, buildDoTokenEnv } from '../../src/lib/server/deployments';
+import { normalizeStatus, buildCliBaseEnv } from '../../src/lib/server/deployments';
 import {
   validateDeploymentName,
   validateRegion,
@@ -107,7 +107,7 @@ describe('normalizeStatus', () => {
   });
 });
 
-describe('buildDoTokenEnv', () => {
+describe('buildCliBaseEnv', () => {
   const originalEnv = process.env;
 
   afterEach(() => {
@@ -116,21 +116,44 @@ describe('buildDoTokenEnv', () => {
 
   it('returns DO_TOKEN when env var is set', () => {
     process.env = { ...originalEnv, DO_TOKEN: 'dop_v1_test123' };
-    const result = buildDoTokenEnv();
+    delete process.env.BYTEPLUS_ARKMODEL_API_KEY;
+    const result = buildCliBaseEnv();
     expect(result).toEqual({ DO_TOKEN: 'dop_v1_test123' });
   });
 
-  it('returns empty object when env var is not set', () => {
+  it('returns empty object when no env vars are set', () => {
     process.env = { ...originalEnv };
     delete process.env.DO_TOKEN;
-    const result = buildDoTokenEnv();
+    delete process.env.BYTEPLUS_ARKMODEL_API_KEY;
+    const result = buildCliBaseEnv();
     expect(result).toEqual({});
   });
 
   it('returns empty object when DO_TOKEN is an empty string', () => {
     process.env = { ...originalEnv, DO_TOKEN: '' };
-    const result = buildDoTokenEnv();
+    delete process.env.BYTEPLUS_ARKMODEL_API_KEY;
+    const result = buildCliBaseEnv();
     expect(result).toEqual({});
+  });
+
+  it('returns BYTEPLUS_ARKMODEL_API_KEY when env var is set', () => {
+    process.env = { ...originalEnv, BYTEPLUS_ARKMODEL_API_KEY: 'bp-test-key-123' };
+    delete process.env.DO_TOKEN;
+    const result = buildCliBaseEnv();
+    expect(result).toEqual({ BYTEPLUS_ARKMODEL_API_KEY: 'bp-test-key-123' });
+  });
+
+  it('omits BYTEPLUS_ARKMODEL_API_KEY when empty', () => {
+    process.env = { ...originalEnv, BYTEPLUS_ARKMODEL_API_KEY: '' };
+    delete process.env.DO_TOKEN;
+    const result = buildCliBaseEnv();
+    expect(result).toEqual({});
+  });
+
+  it('returns both DO_TOKEN and BYTEPLUS_ARKMODEL_API_KEY together', () => {
+    process.env = { ...originalEnv, DO_TOKEN: 'dop_v1_test123', BYTEPLUS_ARKMODEL_API_KEY: 'bp-test-key-123' };
+    const result = buildCliBaseEnv();
+    expect(result).toEqual({ DO_TOKEN: 'dop_v1_test123', BYTEPLUS_ARKMODEL_API_KEY: 'bp-test-key-123' });
   });
 });
 

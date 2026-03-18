@@ -135,6 +135,10 @@ describe('validateModel', () => {
     expect(validateModel('gemini')).toBe(true);
   });
 
+  it('returns true for byteplus-arkmodel', () => {
+    expect(validateModel('byteplus-arkmodel')).toBe(true);
+  });
+
   it('returns false for an invalid model', () => {
     expect(validateModel('llama')).toBe(false);
   });
