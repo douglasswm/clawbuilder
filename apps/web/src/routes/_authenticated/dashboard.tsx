@@ -16,12 +16,22 @@ function DashboardPage() {
 
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const fetchDeployments = () => {
+    setLoading(true);
+    setError(null);
     getDeployments()
       .then(setDeployments)
-      .catch(console.error)
+      .catch((err) => {
+        console.error(err);
+        setError(err instanceof Error ? err.message : 'Failed to load deployments.');
+      })
       .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    fetchDeployments();
   }, []);
 
   if (loading) {
@@ -34,6 +44,20 @@ function DashboardPage() {
               <div key={i} className="h-32 bg-muted rounded" />
             ))}
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full min-h-[60vh] gap-4">
+        <div className="rounded-md bg-red-50 border border-red-200 p-4 text-sm text-red-700 max-w-md w-full text-center">
+          <p className="font-medium mb-2">Failed to load deployments</p>
+          <p className="text-red-600 mb-3">{error}</p>
+          <Button variant="outline" size="sm" onClick={fetchDeployments}>
+            Retry
+          </Button>
         </div>
       </div>
     );

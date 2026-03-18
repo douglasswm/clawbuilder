@@ -10,6 +10,7 @@ import { Input } from '@workspace/ui/components/input';
 import { Tabs, TabsList, TabsTrigger } from '@workspace/ui/components/tabs';
 import { Badge } from '@workspace/ui/components/badge';
 import { Skeleton } from '@workspace/ui/components/skeleton';
+import { Button } from '@workspace/ui/components/button';
 
 interface Category {
   slug: string;
@@ -54,13 +55,22 @@ const fetchSkills = createServerFn({ method: 'POST' })
   });
 
 interface PersonaPickerProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onSelect: (persona: SelectedPersona) => void;
+  mode?: 'inline' | 'dialog';
+  selectedSlug?: string;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  onSelect: (persona: SelectedPersona | null) => void;
   disabled?: boolean;
 }
 
-export function PersonaPicker({ open, onOpenChange, onSelect, disabled }: PersonaPickerProps) {
+export function PersonaPicker({
+  mode = 'dialog',
+  selectedSlug,
+  open,
+  onOpenChange,
+  onSelect,
+  disabled,
+}: PersonaPickerProps) {
   const [query, setQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState('all');
   const [categories, setCategories] = useState<Category[]>([]);
@@ -69,15 +79,18 @@ export function PersonaPicker({ open, onOpenChange, onSelect, disabled }: Person
   const [error, setError] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Load categories once when dialog opens
+  const isActive = mode === 'inline' ? true : !!open;
+
+  // Load categories once when active
   useEffect(() => {
-    if (!open) return;
+    if (!isActive) return;
     fetchCategories()
       .then((result) => {
-        setCategories(result.data ?? []);
+        const data = result.data;
+        setCategories(Array.isArray(data) ? data : []);
       })
       .catch(() => {});
-  }, [open]);
+  }, [isActive]);
 
   // Load skills with debounce on query/category changes
   const loadSkills = useCallback(
@@ -92,7 +105,8 @@ export function PersonaPicker({ open, onOpenChange, onSelect, disabled }: Person
             setError(result.error);
             setSkills([]);
           } else {
-            setSkills(result.data ?? []);
+            const data = result.data;
+            setSkills(Array.isArray(data) ? data : []);
           }
         } catch {
           setError('Skills catalog temporarily unavailable');
@@ -106,15 +120,139 @@ export function PersonaPicker({ open, onOpenChange, onSelect, disabled }: Person
   );
 
   useEffect(() => {
-    if (!open) return;
+    if (!isActive) return;
     loadSkills(query, activeCategory);
-  }, [open, query, activeCategory, loadSkills]);
+  }, [isActive, query, activeCategory, loadSkills]);
 
   const handleSelect = (skill: Skill) => {
     if (disabled || loading) return;
     onSelect({ slug: skill.slug, name: skill.name, category: skill.category });
-    onOpenChange(false);
+    if (mode === 'dialog') onOpenChange?.(false);
   };
+
+  const selectedSkill = selectedSlug ? skills.find((s) => s.slug === selectedSlug) : null;
+
+  const content = (
+    <div className={mode === 'inline' ? 'space-y-4' : ''}>
+      {/* Selected persona card (inline mode only) */}
+      {mode === 'inline' && selectedSkill && (
+        <div className="rounded-lg border-2 border-primary bg-accent/50 p-4 flex items-start justify-between transition-all animate-in fade-in slide-in-from-top-1 duration-200">
+          <div>
+            <div className="font-medium">{selectedSkill.name}</div>
+            {selectedSkill.description && (
+              <div className="text-sm text-muted-foreground mt-1">{selectedSkill.description}</div>
+            )}
+            {selectedSkill.category && (
+              <Badge variant="secondary" className="mt-2 text-xs">{selectedSkill.category}</Badge>
+            )}
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => onSelect(null)}
+          >
+            Change
+          </Button>
+        </div>
+      )}
+
+      {/* Selected slug but skill not loaded yet (inline mode) */}
+      {mode === 'inline' && selectedSlug && !selectedSkill && !loading && (
+        <div className="rounded-lg border-2 border-primary bg-accent/50 p-4 flex items-center justify-between">
+          <span className="font-medium font-mono text-sm">{selectedSlug}</span>
+          <Button type="button" variant="ghost" size="sm" onClick={() => onSelect(null)}>
+            Change
+          </Button>
+        </div>
+      )}
+
+      <Input
+        placeholder="Search personas..."
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        className={mode === 'dialog' ? 'mt-2' : ''}
+      />
+
+      <Tabs
+        value={activeCategory}
+        onValueChange={setActiveCategory}
+        className={mode === 'dialog' ? 'flex-1 flex flex-col min-h-0 mt-4' : 'mt-4'}
+      >
+        <TabsList className="flex-wrap h-auto gap-1">
+          <TabsTrigger value="all">All</TabsTrigger>
+          {categories.map((cat) => (
+            <TabsTrigger key={cat.slug} value={cat.slug}>
+              {cat.name}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+
+        <div className={mode === 'dialog' ? 'flex-1 overflow-y-auto mt-4' : 'mt-4'}>
+          {error && (
+            <div className="text-center text-muted-foreground py-8">{error}</div>
+          )}
+
+          {loading && !error && (
+            <div className="grid grid-cols-2 gap-3">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <Skeleton key={i} className="h-24 rounded-lg" />
+              ))}
+            </div>
+          )}
+
+          {!loading && !error && skills.length === 0 && (
+            <div className="text-center text-muted-foreground py-8">No personas found</div>
+          )}
+
+          {!loading && !error && skills.length > 0 && (
+            <div className="grid grid-cols-2 gap-3">
+              {skills.map((skill) => (
+                <button
+                  key={skill.slug}
+                  type="button"
+                  onClick={() => handleSelect(skill)}
+                  disabled={disabled || loading}
+                  className={`text-left p-3 rounded-lg border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                    selectedSlug === skill.slug
+                      ? 'border-primary bg-accent ring-1 ring-primary/20'
+                      : 'border-border hover:border-primary hover:bg-accent'
+                  }`}
+                >
+                  <div className="font-medium text-sm">{skill.name}</div>
+                  {skill.description && (
+                    <div className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                      {skill.description}
+                    </div>
+                  )}
+                  {skill.category && (
+                    <Badge variant="secondary" className="mt-2 text-xs">
+                      {skill.category}
+                    </Badge>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </Tabs>
+
+      {/* Deploy without persona link (inline mode only) */}
+      {mode === 'inline' && selectedSlug && (
+        <div className="text-center pt-2">
+          <button
+            type="button"
+            className="text-sm text-muted-foreground hover:text-foreground underline-offset-4 hover:underline transition-colors"
+            onClick={() => onSelect(null)}
+          >
+            Deploy without a persona
+          </button>
+        </div>
+      )}
+    </div>
+  );
+
+  if (mode === 'inline') return content;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -122,72 +260,7 @@ export function PersonaPicker({ open, onOpenChange, onSelect, disabled }: Person
         <DialogHeader>
           <DialogTitle>Choose a Persona</DialogTitle>
         </DialogHeader>
-
-        <Input
-          placeholder="Search personas..."
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          className="mt-2"
-        />
-
-        <Tabs
-          value={activeCategory}
-          onValueChange={setActiveCategory}
-          className="flex-1 flex flex-col min-h-0 mt-4"
-        >
-          <TabsList className="flex-wrap h-auto gap-1">
-            <TabsTrigger value="all">All</TabsTrigger>
-            {categories.map((cat) => (
-              <TabsTrigger key={cat.slug} value={cat.slug}>
-                {cat.name}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-
-          <div className="flex-1 overflow-y-auto mt-4">
-            {error && (
-              <div className="text-center text-muted-foreground py-8">{error}</div>
-            )}
-
-            {loading && !error && (
-              <div className="grid grid-cols-2 gap-3">
-                {Array.from({ length: 6 }).map((_, i) => (
-                  <Skeleton key={i} className="h-24 rounded-lg" />
-                ))}
-              </div>
-            )}
-
-            {!loading && !error && skills.length === 0 && (
-              <div className="text-center text-muted-foreground py-8">No personas found</div>
-            )}
-
-            {!loading && !error && skills.length > 0 && (
-              <div className="grid grid-cols-2 gap-3">
-                {skills.map((skill) => (
-                  <button
-                    key={skill.slug}
-                    type="button"
-                    onClick={() => handleSelect(skill)}
-                    disabled={disabled || loading}
-                    className="text-left p-3 rounded-lg border border-border hover:border-primary hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <div className="font-medium text-sm">{skill.name}</div>
-                    {skill.description && (
-                      <div className="text-xs text-muted-foreground mt-1 line-clamp-2">
-                        {skill.description}
-                      </div>
-                    )}
-                    {skill.category && (
-                      <Badge variant="secondary" className="mt-2 text-xs">
-                        {skill.category}
-                      </Badge>
-                    )}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </Tabs>
+        {content}
       </DialogContent>
     </Dialog>
   );

@@ -18,6 +18,7 @@ export const Route = createFileRoute('/_authenticated/settings')({
 
 function SettingsPage() {
   const [keys, setKeys] = useState<UserApiKeysMasked | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [anthropicKey, setAnthropicKey] = useState('');
   const [openaiKey, setOpenaiKey] = useState('');
@@ -26,7 +27,12 @@ function SettingsPage() {
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
-    getUserApiKeys().then(setKeys).catch(console.error);
+    getUserApiKeys()
+      .then(setKeys)
+      .catch((err) => {
+        console.error(err);
+        setLoadError(err instanceof Error ? err.message : 'Failed to load API keys.');
+      });
   }, []);
 
   const handleSave = async (e: React.FormEvent) => {
@@ -61,6 +67,12 @@ function SettingsPage() {
   return (
     <div className="p-6 max-w-2xl">
       <h1 className="text-2xl font-semibold mb-6">Settings</h1>
+
+      {loadError && (
+        <div className="rounded-md bg-red-50 border border-red-200 p-3 text-sm text-red-700 mb-6">
+          {loadError}
+        </div>
+      )}
 
       <Card>
         <CardHeader>

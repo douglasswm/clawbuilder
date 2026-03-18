@@ -7,6 +7,7 @@ import {
   useRouteContext,
   useRouter,
 } from "@tanstack/react-router"
+import { Toaster } from "sonner"
 import { getSupabaseBrowserClient } from "../lib/supabase.browser"
 import { Avatar, AvatarFallback, AvatarImage } from "@workspace/ui/components/avatar"
 import {
@@ -135,6 +136,8 @@ function AuthenticatedLayout() {
       <main className="flex-1">
         <Outlet />
       </main>
+
+      <Toaster position="top-right" richColors />
     </div>
   )
 }

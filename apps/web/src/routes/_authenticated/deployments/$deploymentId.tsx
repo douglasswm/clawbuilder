@@ -26,23 +26,27 @@ function DeploymentDetailPage() {
   const [showDestroyConfirm, setShowDestroyConfirm] = useState(false);
   const [destroying, setDestroying] = useState(false);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isMounted = useRef(true);
 
   const loadDeployment = useCallback(async () => {
     try {
       const dep = await getDeploymentDetail({ data: { deploymentId } });
+      if (!isMounted.current) return null;
       setDeployment(dep);
       return dep;
     } catch (err) {
+      if (!isMounted.current) return null;
       setError(err instanceof Error ? err.message : 'Failed to load deployment');
       return null;
     } finally {
-      setLoading(false);
+      if (isMounted.current) setLoading(false);
     }
   }, [deploymentId]);
 
   const poll = useCallback(async () => {
     try {
       const dep = await pollDeploymentStatus({ data: { deploymentId } });
+      if (!isMounted.current) return;
       setDeployment((prev) => {
         if (!prev) return dep as Deployment;
         const next = dep as Deployment;
@@ -65,27 +69,39 @@ function DeploymentDetailPage() {
   }, [deploymentId]);
 
   useEffect(() => {
+    isMounted.current = true;
     loadDeployment().then((dep) => {
-      if (dep && !TERMINAL_STATUSES.has(dep.status)) {
+      if (isMounted.current && dep && !TERMINAL_STATUSES.has(dep.status)) {
         pollingRef.current = setInterval(poll, 10_000);
       }
     });
     return () => {
-      if (pollingRef.current) clearInterval(pollingRef.current);
+      isMounted.current = false;
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
     };
   }, [loadDeployment, poll]);
 
   const handleDestroy = async () => {
+    // Clear polling immediately to prevent stale polls during destroy
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
     setDestroying(true);
     try {
       await destroyDeployment({ data: { deploymentId } });
+      if (!isMounted.current) return;
       setShowDestroyConfirm(false);
       // Reload to show destroyed status
       await loadDeployment();
     } catch (err) {
+      if (!isMounted.current) return;
       setError(err instanceof Error ? err.message : 'Destroy failed');
     } finally {
-      setDestroying(false);
+      if (isMounted.current) setDestroying(false);
     }
   };
 
