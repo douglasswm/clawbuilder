@@ -79,6 +79,11 @@ export const createDeployment = createServerFn({ method: 'POST' })
     if (!validateSize(size)) throw new Error(`Invalid size: ${size}`);
     if (!validateModel(primaryModel)) throw new Error(`Invalid model: ${primaryModel}`);
 
+    // Pre-flight: require DO_TOKEN before inserting the row so we don't consume a name slot
+    if (!process.env.DO_TOKEN) {
+      throw new Error('DigitalOcean token is not configured. Contact your administrator.');
+    }
+
     // Check user has API keys
     const userKeys = await getDecryptedUserApiKeys(user.id, supabase);
     if (!userKeys.anthropicKey && !userKeys.openaiKey && !userKeys.geminiKey) {
@@ -236,17 +241,27 @@ export const pollDeploymentStatus = createServerFn({ method: 'POST' })
       step_label: stepLabel ?? undefined,
     };
 
-    // If newly running and has persona: push it
+    // If newly running and has persona: claim the push atomically before spawning CLI
+    // to prevent duplicate pushes from concurrent poll calls
     if (normalizedStatus === 'running' && dep.persona_slug && !dep.persona_pushed) {
-      const pushResult = await execClawmacdo(
-        ['skill', 'push', '--slug', dep.persona_slug, '--name', dep.name],
-        { sandboxDir: dep.sandbox_dir ?? undefined, env: cliEnv }
-      );
-      if (pushResult.code === 0) {
-        updates.persona_pushed = true;
-      } else {
-        updates.persona_error = pushResult.stderr || 'Failed to push persona';
+      const { count } = await supabase
+        .from('deployments')
+        .update({ persona_pushed: true }, { count: 'exact' })
+        .eq('id', dep.id)
+        .eq('persona_pushed', false);
+
+      if (count && count > 0) {
+        const pushResult = await execClawmacdo(
+          ['skill', 'push', '--slug', dep.persona_slug, '--name', dep.name],
+          { sandboxDir: dep.sandbox_dir ?? undefined, env: cliEnv }
+        );
+        if (pushResult.code !== 0) {
+          // Push failed — roll back the claim and record the error
+          updates.persona_pushed = false;
+          updates.persona_error = pushResult.stderr || 'Failed to push persona';
+        }
       }
+      // count === 0 means another poll already claimed it — skip
     }
 
     await supabase.from('deployments').update(updates).eq('id', dep.id);
@@ -282,12 +297,17 @@ export const destroyDeployment = createServerFn({ method: 'POST' })
     if (!deployment) throw new Response('Not found', { status: 404 });
 
     const dep = deployment as Deployment;
-    if (['destroyed', 'destroying'].includes(dep.status)) {
+
+    // Atomic status transition: only claim 'destroying' if not already destroying/destroyed
+    const { count } = await supabase
+      .from('deployments')
+      .update({ status: 'destroying' }, { count: 'exact' })
+      .eq('id', dep.id)
+      .not('status', 'in', '("destroying","destroyed")');
+
+    if (!count || count === 0) {
       throw new Error('Deployment is already being destroyed or has been destroyed.');
     }
-
-    // Mark as destroying
-    await supabase.from('deployments').update({ status: 'destroying' }).eq('id', dep.id);
 
     const doToken = process.env.DO_TOKEN;
     const cliEnv: Record<string, string> = {};
