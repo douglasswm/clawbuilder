@@ -8,7 +8,6 @@ import {
   useRouter,
 } from "@tanstack/react-router"
 import { getSupabaseBrowserClient } from "../lib/supabase.browser"
-import { Button } from "@workspace/ui/components/button"
 import { Avatar, AvatarFallback, AvatarImage } from "@workspace/ui/components/avatar"
 import {
   DropdownMenu,
@@ -18,12 +17,8 @@ import {
 } from "@workspace/ui/components/dropdown-menu"
 import { Separator } from "@workspace/ui/components/separator"
 import {
-  BookOpen,
-  ChatCircle,
   Gear,
-  Hash,
-  Lightning,
-  ListChecks,
+  House,
   Plus,
   SignOut,
 } from "@phosphor-icons/react"
@@ -41,12 +36,8 @@ export const Route = createFileRoute("/_authenticated")({
 })
 
 const navItems = [
-  { label: "Chat", icon: ChatCircle, to: "/dashboard" as const },
-  { label: "Activity", icon: Hash, to: "/dashboard" as const },
-  { label: "Tasks", icon: ListChecks, to: "/dashboard" as const },
-  { label: "Knowledge", icon: BookOpen, to: "/dashboard" as const },
-  { label: "Skills", icon: Lightning, to: "/dashboard" as const },
-  { label: "Settings", icon: Gear, to: "/dashboard" as const },
+  { label: "Dashboard", icon: House, to: "/dashboard" as const },
+  { label: "Settings", icon: Gear, to: "/settings" as const },
 ]
 
 function AuthenticatedLayout() {
@@ -104,14 +95,13 @@ function AuthenticatedLayout() {
               Agents
             </span>
           </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="w-full justify-start gap-2 text-sidebar-foreground/70"
+          <Link
+            to="/deploy"
+            className="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
           >
             <Plus className="h-4 w-4" />
             Create an agent
-          </Button>
+          </Link>
         </nav>
 
         <Separator />
