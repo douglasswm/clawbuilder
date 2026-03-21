@@ -56,6 +56,18 @@
 **Priority:** P3
 **Depends on:** Polling implementation (feat/clawmacdo-deploy)
 
+### Tailscale Funnel sandbox state fix
+
+**What:** Ensure CLI sandbox always has valid deploy records for Tailscale Funnel commands.
+
+**Why:** If the `TAILSCALE_AUTH_KEY` env var alone doesn't resolve the "No deploy records found" CLI error, the sandbox directory needs minimal deploy state written before funnel commands.
+
+**Context:** The web app sets `HOME` to `/tmp/clawmacdo-<uuid>` for CLI isolation. For snapshot-restored deployments or older rows with `sandbox_dir = null`, the sandbox may lack deploy records. Approach B would write minimal state files before calling `tailscale-funnel`, `funnel-on`, or `funnel-off`.
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** Tailscale Funnel env var fix shipping + testing
+
 ### Dashboard pagination
 
 **What:** Add cursor-based pagination for the deployments list on the dashboard.
