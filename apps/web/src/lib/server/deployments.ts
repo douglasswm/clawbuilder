@@ -10,6 +10,8 @@ export function buildCliBaseEnv(): Record<string, string> {
   if (doToken) env['DO_TOKEN'] = doToken;
   const byteplusKey = process.env.BYTEPLUS_ARKMODEL_API_KEY;
   if (byteplusKey) env['BYTEPLUS_ARKMODEL_API_KEY'] = byteplusKey;
+  const tsAuthKey = process.env.TAILSCALE_AUTH_KEY;
+  if (tsAuthKey) env['TAILSCALE_AUTH_KEY'] = tsAuthKey;
   return env;
 }
 
@@ -126,13 +128,22 @@ export const createDeployment = createServerFn({ method: 'POST' })
     }
 
     if (snapshotName) {
+      // Validate snapshot name against approved agent templates
+      const { count: templateCount } = await supabase
+        .from('agent_templates')
+        .select('id', { count: 'exact', head: true })
+        .eq('snapshot_name', snapshotName)
+        .eq('is_active', true);
+      if (!templateCount || templateCount === 0) {
+        throw new Error(`Invalid snapshot: "${snapshotName}" is not an approved agent template.`);
+      }
+
       // Snapshot restore via clawmacdo CLI
       const { execClawmacdo } = await import('./clawmacdo');
       const cliEnv = buildCliBaseEnv();
 
       const cliArgs = [
         'do-restore',
-        '--do-token', process.env.DO_TOKEN!,
         '--snapshot-name', snapshotName,
         '--region', region,
         '--size', size,
@@ -295,6 +306,10 @@ export const pollDeploymentStatus = createServerFn({ method: 'POST' })
       { sandboxDir: dep.sandbox_dir ?? undefined, env: cliEnv }
     );
 
+    if (trackResult.code !== 0) {
+      console.warn(`[pollDeploymentStatus] track exited ${trackResult.code}: ${trackResult.stderr}`);
+    }
+
     const events = parseNdjson(trackResult.stdout);
     const latest = events.length > 0 ? events[events.length - 1] as Record<string, unknown> : null;
 
@@ -334,6 +349,9 @@ export const pollDeploymentStatus = createServerFn({ method: 'POST' })
           // Push failed — roll back the claim and record the error
           updates.persona_pushed = false;
           updates.persona_error = pushResult.stderr || 'Failed to push persona';
+        } else {
+          // Push succeeded — reflect in the response so the UI updates immediately
+          updates.persona_pushed = true;
         }
       }
       // count === 0 means another poll already claimed it — skip
@@ -479,7 +497,7 @@ export const destroyDeployment = createServerFn({ method: 'POST' })
 
 /** Toggle Tailscale Funnel on or off for a running deployment */
 export const toggleFunnel = createServerFn({ method: 'POST' })
-  .inputValidator((data: { deploymentId: string; action: 'on' | 'off'; authKey?: string }) => data)
+  .inputValidator((data: { deploymentId: string; action: 'on' | 'off' }) => data)
   .handler(async (ctx) => {
     const { execClawmacdo } = await import('./clawmacdo');
     const { supabase, user } = await getAuthenticatedClient();
@@ -511,15 +529,24 @@ export const toggleFunnel = createServerFn({ method: 'POST' })
 
     const cliEnv = buildCliBaseEnv();
 
+    // Resolve Tailscale auth key: user's encrypted key takes priority over platform default
+    if (ctx.data.action === 'on' && !dep.tailscale_configured) {
+      const { getDecryptedUserApiKeys } = await import('./settings');
+      const userKeys = await getDecryptedUserApiKeys(user.id, supabase);
+      if (userKeys.tailscaleKey) {
+        cliEnv['TAILSCALE_AUTH_KEY'] = userKeys.tailscaleKey;
+      }
+      if (!cliEnv['TAILSCALE_AUTH_KEY']) {
+        throw new Error('No Tailscale auth key found. Add one in Settings, or contact your administrator.');
+      }
+    }
+
     if (ctx.data.action === 'on') {
       // First time: run tailscale-funnel to install + connect + enable
       if (!dep.tailscale_configured) {
-        if (!ctx.data.authKey) {
-          throw new Error('Tailscale auth key is required for first-time setup.');
-        }
 
         const setupResult = await execClawmacdo(
-          ['tailscale-funnel', '--instance', ipAddress, '--auth-key', ctx.data.authKey],
+          ['tailscale-funnel', '--instance', ipAddress],
           { sandboxDir: dep.sandbox_dir ?? undefined, env: cliEnv, timeoutMs: 5 * 60_000 },
         );
 
@@ -536,6 +563,10 @@ export const toggleFunnel = createServerFn({ method: 'POST' })
         if (!funnelUrl) {
           const tsMatch = setupResult.stdout.match(/(https:\/\/\S+\.ts\.net)/);
           if (tsMatch) funnelUrl = tsMatch[1];
+        }
+
+        if (!funnelUrl) {
+          console.warn('[toggleFunnel] CLI exited 0 but no Funnel URL found in stdout');
         }
 
         const tokenMatch = setupResult.stdout.match(/Gateway Token:\s+(\S+)/);
@@ -592,3 +623,28 @@ export const toggleFunnel = createServerFn({ method: 'POST' })
       return { funnelUrl: null, gatewayToken: null };
     }
   });
+
+/** Check whether Tailscale is available via platform env var (pure function for testability) */
+export function checkTailscaleAvailable(): { available: boolean } {
+  return { available: !!process.env.TAILSCALE_AUTH_KEY };
+}
+
+/** Check if Tailscale Funnel is available for the current user (user key OR platform key) */
+export const isTailscaleAvailable = createServerFn({ method: 'GET' }).handler(async () => {
+  // Platform key is always available if set
+  if (process.env.TAILSCALE_AUTH_KEY) {
+    return { available: true };
+  }
+  // Check user's encrypted key
+  try {
+    const { supabase, user } = await getAuthenticatedClient();
+    const { data } = await supabase
+      .from('user_api_keys')
+      .select('tailscale_key_encrypted')
+      .eq('user_id', user.id)
+      .maybeSingle();
+    return { available: !!data?.tailscale_key_encrypted };
+  } catch {
+    return { available: false };
+  }
+});

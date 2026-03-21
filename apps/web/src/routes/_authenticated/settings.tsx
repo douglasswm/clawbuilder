@@ -23,6 +23,7 @@ function SettingsPage() {
   const [anthropicKey, setAnthropicKey] = useState('');
   const [openaiKey, setOpenaiKey] = useState('');
   const [geminiKey, setGeminiKey] = useState('');
+  const [tailscaleKey, setTailscaleKey] = useState('');
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -45,6 +46,7 @@ function SettingsPage() {
           ...(anthropicKey.trim() && { anthropicKey: anthropicKey.trim() }),
           ...(openaiKey.trim() && { openaiKey: openaiKey.trim() }),
           ...(geminiKey.trim() && { geminiKey: geminiKey.trim() }),
+          ...(tailscaleKey.trim() && { tailscaleKey: tailscaleKey.trim() }),
         },
       });
       setMessage({ type: 'success', text: 'API keys saved successfully.' });
@@ -54,6 +56,7 @@ function SettingsPage() {
       setAnthropicKey('');
       setOpenaiKey('');
       setGeminiKey('');
+      setTailscaleKey('');
     } catch (err) {
       setMessage({
         type: 'error',
@@ -137,11 +140,29 @@ function SettingsPage() {
               </p>
             )}
 
+            <div className="space-y-2 pt-4 border-t">
+              <Label htmlFor="tailscale">Tailscale Auth Key</Label>
+              <Input
+                id="tailscale"
+                type="password"
+                placeholder={keys?.tailscaleKeyMasked ?? 'tskey-auth-...'}
+                value={tailscaleKey}
+                onChange={(e) => setTailscaleKey(e.target.value)}
+                autoComplete="off"
+              />
+              {keys?.hasTailscaleKey && !tailscaleKey && (
+                <p className="text-xs text-muted-foreground">Key saved: {keys.tailscaleKeyMasked}</p>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Required for Tailscale Funnel. Each user needs their own key for network isolation.
+              </p>
+            </div>
+
             <Button
               type="submit"
               disabled={
                 saving ||
-                (!anthropicKey.trim() && !openaiKey.trim() && !geminiKey.trim())
+                (!anthropicKey.trim() && !openaiKey.trim() && !geminiKey.trim() && !tailscaleKey.trim())
               }
             >
               {saving ? 'Saving...' : 'Save Keys'}

@@ -23,7 +23,7 @@
     "@tanstack/react-start": "^1.132.0",
     "@tanstack/router-plugin": "^1.132.0",
     "@workspace/ui": "workspace:*",
-    "clawmacdo": "latest",
+    "clawmacdo": "^0.28.0",
     "nitro": "latest",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",

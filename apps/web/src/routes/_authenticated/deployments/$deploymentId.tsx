@@ -1,12 +1,9 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { getDeploymentDetail, pollDeploymentStatus, destroyDeployment, toggleFunnel, TERMINAL_STATUSES } from '../../../lib/server/deployments';
+import { getDeploymentDetail, pollDeploymentStatus, destroyDeployment, toggleFunnel, isTailscaleAvailable, TERMINAL_STATUSES } from '../../../lib/server/deployments';
 import { StatusBadge } from '../../../components/status-badge';
 import { Progress } from '@workspace/ui/components/progress';
 import { Button } from '@workspace/ui/components/button';
-import { Input } from '@workspace/ui/components/input';
-import { Label } from '@workspace/ui/components/label';
-import { Eye, EyeClosed } from '@phosphor-icons/react';
 import {
   Dialog,
   DialogContent,
@@ -31,19 +28,19 @@ function DeploymentDetailPage() {
   const [destroying, setDestroying] = useState(false);
   const [funnelToggling, setFunnelToggling] = useState(false);
   const [funnelError, setFunnelError] = useState<string | null>(null);
-  const [tsAuthKey, setTsAuthKey] = useState('');
-  const [tsKeyVisible, setTsKeyVisible] = useState(false);
+  const [tailscaleAvailable, setTailscaleAvailable] = useState<boolean | null>(null);
   const [funnelRevealing, setFunnelRevealing] = useState(false);
   const [revealProgress, setRevealProgress] = useState(0);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isMounted = useRef(true);
 
-  // Hydrate auth key from localStorage on client mount
+  // Check if platform has Tailscale configured
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem('ts_auth_key');
-      if (stored) setTsAuthKey(stored);
-    } catch { /* SSR or storage unavailable */ }
+    isTailscaleAvailable().then((res) => {
+      if (isMounted.current) setTailscaleAvailable(res.available);
+    }).catch(() => {
+      if (isMounted.current) setTailscaleAvailable(false);
+    });
   }, []);
 
   const loadDeployment = useCallback(async () => {
@@ -127,26 +124,8 @@ function DeploymentDetailPage() {
     setFunnelToggling(true);
     setFunnelError(null);
     try {
-      let authKey: string | undefined;
-      if (action === 'on' && !deployment?.tailscale_configured) {
-        // Try state first, then localStorage
-        let key = tsAuthKey.trim();
-        if (!key) {
-          try { key = localStorage.getItem('ts_auth_key')?.trim() ?? ''; } catch { key = ''; }
-        }
-        if (!key) {
-          setFunnelError('Tailscale auth key is required for first-time setup.');
-          setFunnelToggling(false);
-          return;
-        }
-        authKey = key;
-      }
-      const result = await toggleFunnel({ data: { deploymentId, action, authKey } });
+      const result = await toggleFunnel({ data: { deploymentId, action } });
       if (!isMounted.current) return;
-      // Persist auth key to localStorage on successful first-time setup
-      if (authKey) {
-        try { localStorage.setItem('ts_auth_key', authKey); } catch { /* ignore */ }
-      }
 
       if (action === 'on' && result.funnelUrl) {
         // Show progress animation before revealing the URL
@@ -212,6 +191,9 @@ function DeploymentDetailPage() {
 
   const isActive = !TERMINAL_STATUSES.has(deployment.status);
   const canDestroy = !['destroyed', 'destroying'].includes(deployment.status);
+
+  // Funnel card visibility: show when running AND (funnel is active OR platform key available)
+  const showFunnelCard = deployment.status === 'running' && (!!deployment.funnel_url || tailscaleAvailable !== false);
 
   return (
     <div className="p-6 space-y-6 max-w-2xl">
@@ -284,7 +266,7 @@ function DeploymentDetailPage() {
         </div>
       )}
 
-      {deployment.status === 'running' && (
+      {showFunnelCard && (
         <div className="rounded-lg border p-4 space-y-3">
           <p className="text-sm font-medium">Tailscale Funnel</p>
           {funnelRevealing ? (
@@ -318,44 +300,10 @@ function DeploymentDetailPage() {
                 {funnelToggling ? 'Turning off...' : 'Turn Off Funnel'}
               </Button>
             </div>
-          ) : !deployment.tailscale_configured && !tsAuthKey.trim() ? (
-            <div className="space-y-3">
-              <p className="text-xs text-muted-foreground">
-                A Tailscale auth key is required for first-time setup.
-              </p>
-              <div className="space-y-1.5">
-                <Label htmlFor="ts-auth-key" className="text-xs">Tailscale Auth Key</Label>
-                <div className="relative">
-                  <Input
-                    id="ts-auth-key"
-                    type={tsKeyVisible ? 'text' : 'password'}
-                    placeholder="tskey-auth-..."
-                    value={tsAuthKey}
-                    onChange={(e) => setTsAuthKey(e.target.value)}
-                    disabled={funnelToggling}
-                    className="pr-10"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setTsKeyVisible(!tsKeyVisible)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                    tabIndex={-1}
-                  >
-                    {tsKeyVisible ? <EyeClosed size={18} /> : <Eye size={18} />}
-                  </button>
-                </div>
-              </div>
-              {funnelError && (
-                <p className="text-xs text-red-600">{funnelError}</p>
-              )}
-              <Button
-                size="sm"
-                onClick={() => handleFunnelToggle('on')}
-                disabled={funnelToggling || !tsAuthKey.trim()}
-              >
-                {funnelToggling ? 'Setting up...' : 'Setup & Enable Funnel'}
-              </Button>
-            </div>
+          ) : tailscaleAvailable === false ? (
+            <p className="text-xs text-muted-foreground">
+              Tailscale Funnel is not configured for this platform.
+            </p>
           ) : (
             <div className="space-y-3">
               <p className="text-xs text-muted-foreground">

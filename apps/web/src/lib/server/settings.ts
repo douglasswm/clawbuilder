@@ -6,9 +6,11 @@ export interface UserApiKeysMasked {
   hasAnthropicKey: boolean;
   hasOpenaiKey: boolean;
   hasGeminiKey: boolean;
+  hasTailscaleKey: boolean;
   anthropicKeyMasked?: string; // e.g. "****1234"
   openaiKeyMasked?: string;
   geminiKeyMasked?: string;
+  tailscaleKeyMasked?: string;
 }
 
 function maskKey(key: string | null | undefined): { has: boolean; masked?: string } {
@@ -24,7 +26,7 @@ export const getUserApiKeys = createServerFn({ method: 'GET' }).handler(async ()
 
   const { data } = await supabase
     .from('user_api_keys')
-    .select('anthropic_key_encrypted, openai_key_encrypted, gemini_key_encrypted')
+    .select('anthropic_key_encrypted, openai_key_encrypted, gemini_key_encrypted, tailscale_key_encrypted')
     .eq('user_id', user.id)
     .maybeSingle();
 
@@ -41,14 +43,17 @@ export const getUserApiKeys = createServerFn({ method: 'GET' }).handler(async ()
   const anthropic = safeDecryptMask(data?.anthropic_key_encrypted);
   const openai = safeDecryptMask(data?.openai_key_encrypted);
   const gemini = safeDecryptMask(data?.gemini_key_encrypted);
+  const tailscale = safeDecryptMask(data?.tailscale_key_encrypted);
 
   return {
     hasAnthropicKey: anthropic.has,
     hasOpenaiKey: openai.has,
     hasGeminiKey: gemini.has,
+    hasTailscaleKey: tailscale.has,
     anthropicKeyMasked: anthropic.masked,
     openaiKeyMasked: openai.masked,
     geminiKeyMasked: gemini.masked,
+    tailscaleKeyMasked: tailscale.masked,
   } satisfies UserApiKeysMasked;
 });
 
@@ -56,6 +61,7 @@ export interface SaveApiKeysInput {
   anthropicKey?: string;
   openaiKey?: string;
   geminiKey?: string;
+  tailscaleKey?: string;
 }
 
 /** Save/update user AI API keys (encrypts non-empty values, upserts). */
@@ -64,7 +70,7 @@ export const saveUserApiKeys = createServerFn({ method: 'POST' })
   .handler(async (ctx) => {
     const { encrypt } = await import('./credentials');
     const { supabase, user } = await getAuthenticatedClient();
-    const { anthropicKey, openaiKey, geminiKey } = ctx.data;
+    const { anthropicKey, openaiKey, geminiKey, tailscaleKey } = ctx.data;
 
     const updates: Record<string, string | null> = {};
     if (anthropicKey !== undefined) {
@@ -75,6 +81,9 @@ export const saveUserApiKeys = createServerFn({ method: 'POST' })
     }
     if (geminiKey !== undefined) {
       updates.gemini_key_encrypted = geminiKey.trim() ? encrypt(geminiKey.trim()) : null;
+    }
+    if (tailscaleKey !== undefined) {
+      updates.tailscale_key_encrypted = tailscaleKey.trim() ? encrypt(tailscaleKey.trim()) : null;
     }
 
     if (Object.keys(updates).length === 0) {
@@ -93,12 +102,12 @@ export const saveUserApiKeys = createServerFn({ method: 'POST' })
 export async function hasAnyApiKey(userId: string, supabase: ReturnType<typeof import('../supabase.server').getSupabaseServerClient>['supabase']): Promise<boolean> {
   const { data } = await supabase
     .from('user_api_keys')
-    .select('anthropic_key_encrypted, openai_key_encrypted, gemini_key_encrypted')
+    .select('anthropic_key_encrypted, openai_key_encrypted, gemini_key_encrypted, tailscale_key_encrypted')
     .eq('user_id', userId)
     .maybeSingle();
 
   if (!data) return false;
-  return !!(data.anthropic_key_encrypted || data.openai_key_encrypted || data.gemini_key_encrypted);
+  return !!(data.anthropic_key_encrypted || data.openai_key_encrypted || data.gemini_key_encrypted || data.tailscale_key_encrypted);
 }
 
 /** Internal server-side only: get decrypted API keys for CLI spawn. Never expose to client. */
@@ -106,11 +115,12 @@ export async function getDecryptedUserApiKeys(userId: string, supabase: ReturnTy
   anthropicKey?: string;
   openaiKey?: string;
   geminiKey?: string;
+  tailscaleKey?: string;
 }> {
   const { decrypt } = await import('./credentials');
   const { data } = await supabase
     .from('user_api_keys')
-    .select('anthropic_key_encrypted, openai_key_encrypted, gemini_key_encrypted')
+    .select('anthropic_key_encrypted, openai_key_encrypted, gemini_key_encrypted, tailscale_key_encrypted')
     .eq('user_id', userId)
     .maybeSingle();
 
@@ -130,5 +140,6 @@ export async function getDecryptedUserApiKeys(userId: string, supabase: ReturnTy
     anthropicKey: safeDecrypt(data.anthropic_key_encrypted),
     openaiKey: safeDecrypt(data.openai_key_encrypted),
     geminiKey: safeDecrypt(data.gemini_key_encrypted),
+    tailscaleKey: safeDecrypt(data.tailscale_key_encrypted),
   };
 }

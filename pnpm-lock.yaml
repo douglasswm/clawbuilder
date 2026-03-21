@@ -48,8 +48,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/ui
       clawmacdo:
-        specifier: latest
-        version: 0.20.0
+        specifier: ^0.28.0
+        version: 0.28.0
       nitro:
         specifier: latest
         version: 3.0.1-alpha.2(chokidar@3.6.0)(lru-cache@11.2.7)(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.0)(jiti@2.6.1)(lightningcss@1.31.1)(tsx@4.21.0))
@@ -333,18 +333,18 @@ packages:
     resolution: {integrity: sha512-ctxtJ/eA+t+6q2++vj5j7FYX3nRu311q1wfYH3xjlLOsczhlhxAg2FWNUXhpGvAw3BWo1xBcvOV6/YLc2r5FJw==}
     hasBin: true
 
-  '@clawmacdo/darwin-arm64@0.20.0':
-    resolution: {integrity: sha512-JQ76Jy/Mps7r0l2b7T0X6PDqP3LM3wLHJSyIElRp031qOwnbwzWYkZJbOndCBjW0cDXOtRdeo41Xmmh5xrdGyA==}
+  '@clawmacdo/darwin-arm64@0.28.0':
+    resolution: {integrity: sha512-deGuI+GwmRKR9O4zgxMjisnC8fOg/X2peA+1mAcVOGXBrlny6xM0B2KFiKnA8J1jflDVvn2iEQnAoLTP0iYkeA==}
     cpu: [arm64]
     os: [darwin]
 
-  '@clawmacdo/linux-x64@0.20.0':
-    resolution: {integrity: sha512-9HOypVd2+YPIVhRWHIHrJMuxoJfaQLnFqRtGmesbHtwPDQJx8HqKsegGJf4lM3FBr8gNuujJsEtrxD7CbhYRhA==}
+  '@clawmacdo/linux-x64@0.28.0':
+    resolution: {integrity: sha512-cQvA5JLFCcb6oTX9V80idKDH40QWuLpe5ahQNOYx0wt5GN268oWq8TXUFGDzGMbpqWp96Hmf1fOO49D2dDw7Xg==}
     cpu: [x64]
     os: [linux]
 
-  '@clawmacdo/win32-x64@0.20.0':
-    resolution: {integrity: sha512-ZMBR4REgYQXj+cj2TqkVBOAHB/827qbQwDKxSEO8qK+xIVS8JxqBoufwmVlzrS01WU1rJb0MUjhdRxfz8mzEzg==}
+  '@clawmacdo/win32-x64@0.28.0':
+    resolution: {integrity: sha512-6EvwFSFwCuTtu9CTpWRvmChHwfbPAlcsL+F6h/wPJbo4KWGkQv/uBpl7N4ncuyTddsPQ1yvcMzCCisQk0ODCFg==}
     cpu: [x64]
     os: [win32]
 
@@ -2650,8 +2650,8 @@ packages:
   class-variance-authority@0.7.1:
     resolution: {integrity: sha512-Ka+9Trutv7G8M6WT6SeiRWz792K5qEqIGEGzXKhAE6xOWAY6pPH8U+9IY3oCMv6kqTmLsv7Xh/2w2RigkePMsg==}
 
-  clawmacdo@0.20.0:
-    resolution: {integrity: sha512-2yX7FU8QSZFzlEjxARqjQ0mD3nUWFH6AeUyCWPzziHNhfN/etV/G+RzbWA4fLrdETcndIuSX9rJylxLTOfefpA==}
+  clawmacdo@0.28.0:
+    resolution: {integrity: sha512-WugMNwxBBt97R2UQylvt8823m74ISXpnE/pW246JAmCWRqCs8jlVI5aDkXGl1/Pcb7139EZqDtruAitX1G0+lQ==}
     engines: {node: '>=16'}
     hasBin: true
 
@@ -5265,13 +5265,13 @@ snapshots:
     dependencies:
       css-tree: 3.2.1
 
-  '@clawmacdo/darwin-arm64@0.20.0':
+  '@clawmacdo/darwin-arm64@0.28.0':
     optional: true
 
-  '@clawmacdo/linux-x64@0.20.0':
+  '@clawmacdo/linux-x64@0.28.0':
     optional: true
 
-  '@clawmacdo/win32-x64@0.20.0':
+  '@clawmacdo/win32-x64@0.28.0':
     optional: true
 
   '@csstools/color-helpers@6.0.2': {}
@@ -7554,11 +7554,11 @@ snapshots:
     dependencies:
       clsx: 2.1.1
 
-  clawmacdo@0.20.0:
+  clawmacdo@0.28.0:
     optionalDependencies:
-      '@clawmacdo/darwin-arm64': 0.20.0
-      '@clawmacdo/linux-x64': 0.20.0
-      '@clawmacdo/win32-x64': 0.20.0
+      '@clawmacdo/darwin-arm64': 0.28.0
+      '@clawmacdo/linux-x64': 0.28.0
+      '@clawmacdo/win32-x64': 0.28.0
 
   clean-stack@2.2.0: {}
 
