@@ -10,6 +10,9 @@ export const SIZES = [
 
 export const PROVIDERS = ['digitalocean', 'aws-lightsail', 'byteplus'] as const;
 
+/** Providers that the CLI actually supports today. Gate the deploy UI to these. */
+export const SUPPORTED_PROVIDERS: readonly string[] = ['digitalocean'];
+
 export const MODELS = ['anthropic', 'openai', 'gemini', 'byteplus-arkmodel'] as const;
 
 export type Region = typeof REGIONS[number];

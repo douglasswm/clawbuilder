@@ -8,7 +8,7 @@ import { Button } from '@workspace/ui/components/button';
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '@workspace/ui/components/collapsible';
 import { CaretDown } from '@phosphor-icons/react';
 import {
-  REGIONS, SIZES, PROVIDERS,
+  REGIONS, SIZES, SUPPORTED_PROVIDERS,
   REGION_LABELS, SIZE_LABELS, PROVIDER_LABELS,
   validateDeploymentName,
   generateDeploymentName,
@@ -35,7 +35,7 @@ function DeployPage() {
   const [region, setRegion] = useState('sgp1');
   const [size, setSize] = useState('s-2vcpu-4gb');
   const [provider, setProvider] = useState(
-    urlProvider && (PROVIDERS as readonly string[]).includes(urlProvider)
+    urlProvider && SUPPORTED_PROVIDERS.includes(urlProvider)
       ? urlProvider
       : 'digitalocean',
   );
@@ -170,7 +170,7 @@ function DeployPage() {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {PROVIDERS.map((p) => (
+            {SUPPORTED_PROVIDERS.map((p) => (
               <SelectItem key={p} value={p}>
                 {PROVIDER_LABELS[p] ?? p}
               </SelectItem>

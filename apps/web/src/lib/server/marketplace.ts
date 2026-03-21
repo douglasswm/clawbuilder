@@ -57,8 +57,10 @@ export const listMarketplaceTemplates = createServerFn({ method: 'GET' })
       .order('deploy_count', { ascending: false });
 
     if (query.trim()) {
+      // Escape SQL LIKE wildcards in user input to prevent unexpected matches
+      const escaped = query.trim().replace(/[%_\\]/g, '\\$&');
       q = q.or(
-        `name.ilike.%${query.trim()}%,description.ilike.%${query.trim()}%`,
+        `name.ilike.%${escaped}%,description.ilike.%${escaped}%`,
       );
     }
 

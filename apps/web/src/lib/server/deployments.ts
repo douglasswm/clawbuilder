@@ -143,7 +143,7 @@ export const createDeployment = createServerFn({ method: 'POST' })
         user_id: user.id,
         name,
         status: 'pending',
-        provider: 'digitalocean',
+        provider,
         region,
         size,
         primary_model: platformModel,
