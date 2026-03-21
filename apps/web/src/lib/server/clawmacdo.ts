@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 
 const TIMEOUT_MS = 30_000;
+export const RESTORE_TIMEOUT_MS = 10 * 60_000; // 10 minutes for snapshot restores
 
 export interface CliResult {
   stdout: string;
@@ -15,6 +16,7 @@ export interface CliResult {
 export interface ExecOptions {
   sandboxDir?: string;
   env?: Record<string, string>;
+  timeoutMs?: number;
 }
 
 type CliExecutor = (args: string[], options?: ExecOptions) => Promise<CliResult>;
@@ -78,7 +80,7 @@ export function execClawmacdo(args: string[], options: ExecOptions = {}): Promis
     const timer = setTimeout(() => {
       timedOut = true;
       proc.kill('SIGTERM');
-    }, TIMEOUT_MS);
+    }, options.timeoutMs ?? TIMEOUT_MS);
 
     proc.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
     proc.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });

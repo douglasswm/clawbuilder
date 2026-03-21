@@ -19,6 +19,7 @@ export interface CreateDeploymentInput {
   size: string;
   personaSlug?: string;
   personaName?: string;
+  snapshotName?: string;
 }
 
 export interface Deployment {
@@ -32,10 +33,14 @@ export interface Deployment {
   primary_model: string | null;
   cli_deploy_id?: string;
   ip_address?: string;
+  droplet_hostname?: string;
   persona_slug?: string;
   persona_name?: string;
   persona_pushed: boolean;
   persona_error?: string;
+  funnel_url?: string;
+  gateway_token?: string;
+  tailscale_configured: boolean;
   current_step: number;
   total_steps: number;
   step_label?: string;
@@ -73,12 +78,12 @@ export const getDeploymentDetail = createServerFn({ method: 'GET' })
     return data as Deployment;
   });
 
-/** Create a new deployment - runs clawmacdo deploy --detach --json */
+/** Create a new deployment via clawmacdo REST API (snapshot restore) or CLI (fresh deploy) */
 export const createDeployment = createServerFn({ method: 'POST' })
   .inputValidator((data: CreateDeploymentInput) => data)
   .handler(async (ctx) => {
     const { supabase, user } = await getAuthenticatedClient();
-    const { name, region, size, personaSlug, personaName } = ctx.data;
+    const { name, region, size, personaSlug, personaName, snapshotName } = ctx.data;
 
     // Server-side validation
     const nameValidation = validateDeploymentName(name);
@@ -86,15 +91,14 @@ export const createDeployment = createServerFn({ method: 'POST' })
     if (!validateRegion(region)) throw new Error(`Invalid region: ${region}`);
     if (!validateSize(size)) throw new Error(`Invalid size: ${size}`);
 
-    const { execClawmacdo } = await import('./clawmacdo');
-    const { getDecryptedUserApiKeys } = await import('./settings');
-
-    // Pre-flight: require DO_TOKEN before inserting the row so we don't consume a name slot
     if (!process.env.DO_TOKEN) {
       throw new Error('DigitalOcean token is not configured. Contact your administrator.');
     }
 
-    // Resolve platform default model from env
+    if (!user.email) {
+      throw new Error('Your account has no email address. Please sign in with Google.');
+    }
+
     const platformModel = process.env.PLATFORM_DEFAULT_MODEL || null;
 
     // Insert deployment row (unique constraint prevents double-submit)
@@ -121,78 +125,119 @@ export const createDeployment = createServerFn({ method: 'POST' })
       throw new Error(insertError.message);
     }
 
-    // Build CLI args
-    const cliArgs = [
-      'deploy',
-      '--provider', 'digitalocean',
-      '--region', region,
-      '--size', size,
-      '--hostname', name,
-      '--detach',
-      '--json',
-    ];
-    if (platformModel) {
-      cliArgs.push('--primary-model', platformModel);
-    }
+    if (snapshotName) {
+      // Snapshot restore via clawmacdo CLI
+      const { execClawmacdo } = await import('./clawmacdo');
+      const cliEnv = buildCliBaseEnv();
 
-    // Decrypt keys for CLI (after insert succeeds, so we only decrypt when needed)
-    const userKeys = await getDecryptedUserApiKeys(user.id, supabase);
-    const cliEnv = buildCliBaseEnv();
-    if (userKeys.anthropicKey) cliEnv['ANTHROPIC_API_KEY'] = userKeys.anthropicKey;
-    if (userKeys.openaiKey) cliEnv['OPENAI_API_KEY'] = userKeys.openaiKey;
-    if (userKeys.geminiKey) cliEnv['GEMINI_API_KEY'] = userKeys.geminiKey;
+      const cliArgs = [
+        'do-restore',
+        '--do-token', process.env.DO_TOKEN!,
+        '--snapshot-name', snapshotName,
+        '--region', region,
+        '--size', size,
+      ];
 
-    // Run deploy CLI
-    let result;
-    try {
-      result = await execClawmacdo(cliArgs, { env: cliEnv });
-    } catch (err) {
-      await supabase.from('deployments').update({
-        status: 'failed',
-        error_message: String(err),
-      }).eq('id', deployment.id);
-      if (result?.sandboxDir || deployment.sandbox_dir) {
-        try {
-          const { rmSync } = await import('node:fs');
-          rmSync((result?.sandboxDir || deployment.sandbox_dir)!, { recursive: true, force: true });
-        } catch {
-          // Non-critical
-        }
+      let result;
+      try {
+        result = await execClawmacdo(cliArgs, { env: cliEnv, timeoutMs: 10 * 60_000 });
+      } catch (err) {
+        await supabase.from('deployments').update({
+          status: 'failed',
+          error_message: String(err),
+        }).eq('id', deployment.id);
+        throw new Error(`CLI error: ${String(err)}`);
       }
-      throw new Error(`CLI error: ${String(err)}`);
-    }
 
-    // Parse deploy_id from JSON output
-    let cliDeployId: string | undefined;
-    try {
-      const parsed = JSON.parse(result.stdout.trim());
-      cliDeployId = parsed.deploy_id ?? parsed.id ?? undefined;
-    } catch {
-      // stdout wasn't JSON — that's okay for some CLI versions
-    }
-
-    if (result.code !== 0) {
-      await supabase.from('deployments').update({
-        status: 'failed',
-        error_message: result.stderr || 'Deploy command failed',
-      }).eq('id', deployment.id);
-      if (result.sandboxDir) {
-        try {
-          const { rmSync } = await import('node:fs');
-          rmSync(result.sandboxDir, { recursive: true, force: true });
-        } catch {
-          // Non-critical
-        }
+      if (result.code !== 0) {
+        await supabase.from('deployments').update({
+          status: 'failed',
+          error_message: result.stderr || 'Restore command failed',
+        }).eq('id', deployment.id);
+        throw new Error(result.stderr || 'Restore command failed');
       }
-      throw new Error(result.stderr || 'Deploy command failed');
-    }
 
-    // Update row with cli_deploy_id and sandbox_dir
-    await supabase.from('deployments').update({
-      status: 'provisioning',
-      cli_deploy_id: cliDeployId ?? null,
-      sandbox_dir: result.sandboxDir,
-    }).eq('id', deployment.id);
+      // Parse structured output from do-restore stdout:
+      //   Deploy ID:   9ba625bb-...
+      //   Hostname:    openclaw-9ba625bb
+      //   IP Address:  167.99.73.79
+      const ipMatch = result.stdout.match(/IP Address:\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/);
+      const hostnameMatch = result.stdout.match(/Hostname:\s+(\S+)/);
+      const deployIdMatch = result.stdout.match(/Deploy ID:\s+(\S+)/);
+
+      await supabase.from('deployments').update({
+        status: 'running',
+        ip_address: ipMatch?.[1] ?? null,
+        droplet_hostname: hostnameMatch?.[1] ?? null,
+        cli_deploy_id: deployIdMatch?.[1] ?? null,
+        sandbox_dir: result.sandboxDir,
+      }).eq('id', deployment.id);
+    } else {
+      // Fresh deploy via clawmacdo CLI
+      const { execClawmacdo } = await import('./clawmacdo');
+      const { getDecryptedUserApiKeys } = await import('./settings');
+
+      const cliArgs = [
+        'deploy',
+        '--provider', 'digitalocean',
+        '--customer-email', user.email,
+        '--region', region,
+        '--size', size,
+        '--hostname', name,
+        '--detach',
+        '--json',
+      ];
+      if (platformModel) {
+        cliArgs.push('--primary-model', platformModel);
+      }
+
+      const userKeys = await getDecryptedUserApiKeys(user.id, supabase);
+      const cliEnv = buildCliBaseEnv();
+      if (userKeys.anthropicKey) cliEnv['ANTHROPIC_API_KEY'] = userKeys.anthropicKey;
+      if (userKeys.openaiKey) cliEnv['OPENAI_API_KEY'] = userKeys.openaiKey;
+      if (userKeys.geminiKey) cliEnv['GEMINI_API_KEY'] = userKeys.geminiKey;
+
+      let result;
+      try {
+        result = await execClawmacdo(cliArgs, { env: cliEnv });
+      } catch (err) {
+        await supabase.from('deployments').update({
+          status: 'failed',
+          error_message: String(err),
+        }).eq('id', deployment.id);
+        throw new Error(`CLI error: ${String(err)}`);
+      }
+
+      let cliDeployId: string | undefined;
+      try {
+        const parsed = JSON.parse(result.stdout.trim());
+        cliDeployId = parsed.deploy_id ?? parsed.id ?? undefined;
+      } catch {
+        // stdout wasn't JSON
+      }
+
+      if (result.code !== 0) {
+        await supabase.from('deployments').update({
+          status: 'failed',
+          error_message: result.stderr || 'Deploy command failed',
+        }).eq('id', deployment.id);
+        if (result.sandboxDir) {
+          try {
+            const { rmSync } = await import('node:fs');
+            rmSync(result.sandboxDir, { recursive: true, force: true });
+          } catch {
+            // Non-critical
+          }
+        }
+        throw new Error(result.stderr || 'Deploy command failed');
+      }
+
+      await supabase.from('deployments').update({
+        status: 'provisioning',
+        cli_deploy_id: cliDeployId ?? null,
+        sandbox_dir: result.sandboxDir,
+      }).eq('id', deployment.id);
+    }
 
     return { deploymentId: deployment.id };
   });
@@ -311,6 +356,64 @@ export function normalizeStatus(rawStatus: string, currentStatus: string): strin
   return statusMap[rawStatus?.toLowerCase()] ?? currentStatus;
 }
 
+async function resolveDropletIp(name: string): Promise<string | null> {
+  const doToken = process.env.DO_TOKEN;
+  if (!doToken) return null;
+
+  // Search by name — don't filter by tag since restored snapshots may not be tagged
+  const listRes = await fetch(
+    `https://api.digitalocean.com/v2/droplets?per_page=200`,
+    { headers: { Authorization: `Bearer ${doToken}` } }
+  );
+  if (!listRes.ok) return null;
+  const { droplets } = (await listRes.json()) as {
+    droplets: Array<{ name: string; networks: { v4: Array<{ ip_address: string; type: string }> } }>;
+  };
+
+  const match = droplets.find((d) => d.name === name || d.name === `openclaw-${name}`);
+  if (!match) return null;
+
+  const publicNet = match.networks.v4.find((n) => n.type === 'public');
+  return publicNet?.ip_address ?? null;
+}
+
+async function destroyDropletViaApi(dep: { name: string; ip_address?: string; droplet_hostname?: string }): Promise<void> {
+  const doToken = process.env.DO_TOKEN;
+  if (!doToken) throw new Error('DO_TOKEN is not configured');
+
+  const listRes = await fetch(
+    `https://api.digitalocean.com/v2/droplets?per_page=200`,
+    { headers: { Authorization: `Bearer ${doToken}` } }
+  );
+  if (!listRes.ok) throw new Error(`DO API error: ${listRes.status} ${await listRes.text()}`);
+  const { droplets } = (await listRes.json()) as {
+    droplets: Array<{ id: number; name: string; networks: { v4: Array<{ ip_address: string; type: string }> } }>;
+  };
+
+  // Match by droplet hostname, deployment name, or IP address
+  const match = droplets.find((d) => {
+    if (dep.droplet_hostname && d.name === dep.droplet_hostname) return true;
+    if (d.name === dep.name || d.name === `openclaw-${dep.name}`) return true;
+    if (dep.ip_address) {
+      return d.networks.v4.some((n) => n.ip_address === dep.ip_address);
+    }
+    return false;
+  });
+
+  if (!match) {
+    // Droplet truly doesn't exist on DO — nothing to destroy
+    return;
+  }
+
+  const deleteRes = await fetch(
+    `https://api.digitalocean.com/v2/droplets/${match.id}`,
+    { method: 'DELETE', headers: { Authorization: `Bearer ${doToken}` } }
+  );
+  if (!deleteRes.ok && deleteRes.status !== 404) {
+    throw new Error(`DO API destroy failed: ${deleteRes.status} ${await deleteRes.text()}`);
+  }
+}
+
 /** Destroy a deployment */
 export const destroyDeployment = createServerFn({ method: 'POST' })
   .inputValidator((data: { deploymentId: string }) => data)
@@ -348,11 +451,16 @@ export const destroyDeployment = createServerFn({ method: 'POST' })
     );
 
     if (result.code !== 0) {
-      await supabase.from('deployments').update({
-        status: dep.status,
-        error_message: result.stderr || 'Destroy failed',
-      }).eq('id', dep.id);
-      throw new Error(result.stderr || 'Destroy failed');
+      // CLI destroy failed — fall back to DO API using name + IP
+      try {
+        await destroyDropletViaApi(dep);
+      } catch (apiErr) {
+        await supabase.from('deployments').update({
+          status: dep.status,
+          error_message: result.stderr || String(apiErr),
+        }).eq('id', dep.id);
+        throw new Error(result.stderr || String(apiErr));
+      }
     }
 
     // Clean up sandbox dir
@@ -365,6 +473,122 @@ export const destroyDeployment = createServerFn({ method: 'POST' })
       }
     }
 
-    await supabase.from('deployments').update({ status: 'destroyed' }).eq('id', dep.id);
+    await supabase.from('deployments').update({ status: 'destroyed', error_message: null }).eq('id', dep.id);
     return { success: true };
+  });
+
+/** Toggle Tailscale Funnel on or off for a running deployment */
+export const toggleFunnel = createServerFn({ method: 'POST' })
+  .inputValidator((data: { deploymentId: string; action: 'on' | 'off'; authKey?: string }) => data)
+  .handler(async (ctx) => {
+    const { execClawmacdo } = await import('./clawmacdo');
+    const { supabase, user } = await getAuthenticatedClient();
+
+    const { data: deployment } = await supabase
+      .from('deployments')
+      .select('*')
+      .eq('id', ctx.data.deploymentId)
+      .eq('user_id', user.id)
+      .maybeSingle();
+
+    if (!deployment) throw new Response('Not found', { status: 404 });
+
+    const dep = deployment as Deployment;
+
+    if (dep.status !== 'running') {
+      throw new Error('Tailscale Funnel can only be toggled on a running deployment.');
+    }
+
+    let ipAddress = dep.ip_address;
+    if (!ipAddress) {
+      const resolved = await resolveDropletIp(dep.droplet_hostname ?? dep.name);
+      if (!resolved) {
+        throw new Error('Could not resolve droplet IP. Ensure the instance is running on DigitalOcean.');
+      }
+      ipAddress = resolved;
+      await supabase.from('deployments').update({ ip_address: resolved }).eq('id', dep.id);
+    }
+
+    const cliEnv = buildCliBaseEnv();
+
+    if (ctx.data.action === 'on') {
+      // First time: run tailscale-funnel to install + connect + enable
+      if (!dep.tailscale_configured) {
+        if (!ctx.data.authKey) {
+          throw new Error('Tailscale auth key is required for first-time setup.');
+        }
+
+        const setupResult = await execClawmacdo(
+          ['tailscale-funnel', '--instance', ipAddress, '--auth-key', ctx.data.authKey],
+          { sandboxDir: dep.sandbox_dir ?? undefined, env: cliEnv, timeoutMs: 5 * 60_000 },
+        );
+
+        if (setupResult.code !== 0) {
+          throw new Error(setupResult.stderr || 'Tailscale Funnel setup failed');
+        }
+
+        // Parse URL and gateway token from tailscale-funnel output
+        let funnelUrl: string | undefined;
+        let gatewayToken: string | undefined;
+
+        const urlMatch = setupResult.stdout.match(/Public URL:\s+(https:\/\/\S+)/);
+        if (urlMatch) funnelUrl = urlMatch[1];
+        if (!funnelUrl) {
+          const tsMatch = setupResult.stdout.match(/(https:\/\/\S+\.ts\.net)/);
+          if (tsMatch) funnelUrl = tsMatch[1];
+        }
+
+        const tokenMatch = setupResult.stdout.match(/Gateway Token:\s+(\S+)/);
+        if (tokenMatch) gatewayToken = tokenMatch[1];
+
+        await supabase.from('deployments').update({
+          tailscale_configured: true,
+          funnel_url: funnelUrl ?? null,
+          gateway_token: gatewayToken ?? null,
+        }).eq('id', dep.id);
+
+        return { funnelUrl, gatewayToken };
+      }
+
+      // Already configured: just turn funnel on
+      const result = await execClawmacdo(
+        ['funnel-on', '--instance', ipAddress],
+        { sandboxDir: dep.sandbox_dir ?? undefined, env: cliEnv, timeoutMs: 2 * 60_000 },
+      );
+
+      if (result.code !== 0) {
+        throw new Error(result.stderr || 'Failed to enable Tailscale Funnel');
+      }
+
+      let funnelUrl: string | undefined;
+      const urlMatch = result.stdout.match(/(https:\/\/\S+\.ts\.net)/);
+      if (urlMatch) funnelUrl = urlMatch[1];
+
+      let gatewayToken: string | undefined;
+      const tokenMatch = result.stdout.match(/Gateway Token:\s+(\S+)/);
+      if (tokenMatch) gatewayToken = tokenMatch[1];
+
+      await supabase.from('deployments').update({
+        funnel_url: funnelUrl ?? dep.funnel_url ?? null,
+        gateway_token: gatewayToken ?? dep.gateway_token ?? null,
+      }).eq('id', dep.id);
+
+      return { funnelUrl: funnelUrl ?? dep.funnel_url, gatewayToken: gatewayToken ?? dep.gateway_token };
+    } else {
+      // Turn funnel off
+      const result = await execClawmacdo(
+        ['funnel-off', '--instance', ipAddress],
+        { sandboxDir: dep.sandbox_dir ?? undefined, env: cliEnv, timeoutMs: 2 * 60_000 },
+      );
+
+      if (result.code !== 0) {
+        throw new Error(result.stderr || 'Failed to disable Tailscale Funnel');
+      }
+
+      await supabase.from('deployments').update({
+        funnel_url: null,
+      }).eq('id', dep.id);
+
+      return { funnelUrl: null, gatewayToken: null };
+    }
   });

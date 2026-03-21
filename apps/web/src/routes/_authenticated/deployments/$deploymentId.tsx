@@ -1,9 +1,12 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { getDeploymentDetail, pollDeploymentStatus, destroyDeployment, TERMINAL_STATUSES } from '../../../lib/server/deployments';
+import { getDeploymentDetail, pollDeploymentStatus, destroyDeployment, toggleFunnel, TERMINAL_STATUSES } from '../../../lib/server/deployments';
 import { StatusBadge } from '../../../components/status-badge';
 import { Progress } from '@workspace/ui/components/progress';
 import { Button } from '@workspace/ui/components/button';
+import { Input } from '@workspace/ui/components/input';
+import { Label } from '@workspace/ui/components/label';
+import { Eye, EyeClosed } from '@phosphor-icons/react';
 import {
   Dialog,
   DialogContent,
@@ -26,8 +29,22 @@ function DeploymentDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [showDestroyConfirm, setShowDestroyConfirm] = useState(false);
   const [destroying, setDestroying] = useState(false);
+  const [funnelToggling, setFunnelToggling] = useState(false);
+  const [funnelError, setFunnelError] = useState<string | null>(null);
+  const [tsAuthKey, setTsAuthKey] = useState('');
+  const [tsKeyVisible, setTsKeyVisible] = useState(false);
+  const [funnelRevealing, setFunnelRevealing] = useState(false);
+  const [revealProgress, setRevealProgress] = useState(0);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isMounted = useRef(true);
+
+  // Hydrate auth key from localStorage on client mount
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('ts_auth_key');
+      if (stored) setTsAuthKey(stored);
+    } catch { /* SSR or storage unavailable */ }
+  }, []);
 
   const loadDeployment = useCallback(async () => {
     try {
@@ -103,6 +120,71 @@ function DeploymentDetailPage() {
       setError(err instanceof Error ? err.message : 'Destroy failed');
     } finally {
       if (isMounted.current) setDestroying(false);
+    }
+  };
+
+  const handleFunnelToggle = async (action: 'on' | 'off') => {
+    setFunnelToggling(true);
+    setFunnelError(null);
+    try {
+      let authKey: string | undefined;
+      if (action === 'on' && !deployment?.tailscale_configured) {
+        // Try state first, then localStorage
+        let key = tsAuthKey.trim();
+        if (!key) {
+          try { key = localStorage.getItem('ts_auth_key')?.trim() ?? ''; } catch { key = ''; }
+        }
+        if (!key) {
+          setFunnelError('Tailscale auth key is required for first-time setup.');
+          setFunnelToggling(false);
+          return;
+        }
+        authKey = key;
+      }
+      const result = await toggleFunnel({ data: { deploymentId, action, authKey } });
+      if (!isMounted.current) return;
+      // Persist auth key to localStorage on successful first-time setup
+      if (authKey) {
+        try { localStorage.setItem('ts_auth_key', authKey); } catch { /* ignore */ }
+      }
+
+      if (action === 'on' && result.funnelUrl) {
+        // Show progress animation before revealing the URL
+        setFunnelRevealing(true);
+        setRevealProgress(0);
+        const start = Date.now();
+        const duration = 5000;
+        const tick = () => {
+          if (!isMounted.current) return;
+          const elapsed = Date.now() - start;
+          const pct = Math.min(100, Math.round((elapsed / duration) * 100));
+          setRevealProgress(pct);
+          if (elapsed < duration) {
+            requestAnimationFrame(tick);
+          } else {
+            setFunnelRevealing(false);
+            setDeployment((prev) => prev ? {
+              ...prev,
+              funnel_url: result.funnelUrl ?? undefined,
+              gateway_token: result.gatewayToken ?? undefined,
+              tailscale_configured: true,
+            } : prev);
+          }
+        };
+        requestAnimationFrame(tick);
+      } else {
+        setDeployment((prev) => prev ? {
+          ...prev,
+          funnel_url: result.funnelUrl ?? undefined,
+          gateway_token: result.gatewayToken ?? undefined,
+          tailscale_configured: action === 'on' ? true : prev.tailscale_configured,
+        } : prev);
+      }
+    } catch (err) {
+      if (!isMounted.current) return;
+      setFunnelError(err instanceof Error ? err.message : `Failed to turn funnel ${action}`);
+    } finally {
+      if (isMounted.current) setFunnelToggling(false);
     }
   };
 
@@ -198,6 +280,98 @@ function DeploymentDetailPage() {
           )}
           {!deployment.persona_pushed && !deployment.persona_error && (
             <p className="text-xs text-muted-foreground">Persona will be pushed when deployment is running</p>
+          )}
+        </div>
+      )}
+
+      {deployment.status === 'running' && (
+        <div className="rounded-lg border p-4 space-y-3">
+          <p className="text-sm font-medium">Tailscale Funnel</p>
+          {funnelRevealing ? (
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">Setting up public access...</p>
+              <Progress value={revealProgress} />
+              <p className="text-xs text-muted-foreground text-right">{revealProgress}%</p>
+            </div>
+          ) : deployment.funnel_url ? (
+            <div className="space-y-3">
+              <div>
+                <p className="text-xs text-muted-foreground">Public URL</p>
+                <a
+                  href={deployment.funnel_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-sm font-mono text-blue-600 hover:underline break-all"
+                >
+                  {deployment.funnel_url}
+                </a>
+              </div>
+              {funnelError && (
+                <p className="text-xs text-red-600">{funnelError}</p>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleFunnelToggle('off')}
+                disabled={funnelToggling}
+              >
+                {funnelToggling ? 'Turning off...' : 'Turn Off Funnel'}
+              </Button>
+            </div>
+          ) : !deployment.tailscale_configured && !tsAuthKey.trim() ? (
+            <div className="space-y-3">
+              <p className="text-xs text-muted-foreground">
+                A Tailscale auth key is required for first-time setup.
+              </p>
+              <div className="space-y-1.5">
+                <Label htmlFor="ts-auth-key" className="text-xs">Tailscale Auth Key</Label>
+                <div className="relative">
+                  <Input
+                    id="ts-auth-key"
+                    type={tsKeyVisible ? 'text' : 'password'}
+                    placeholder="tskey-auth-..."
+                    value={tsAuthKey}
+                    onChange={(e) => setTsAuthKey(e.target.value)}
+                    disabled={funnelToggling}
+                    className="pr-10"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setTsKeyVisible(!tsKeyVisible)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    tabIndex={-1}
+                  >
+                    {tsKeyVisible ? <EyeClosed size={18} /> : <Eye size={18} />}
+                  </button>
+                </div>
+              </div>
+              {funnelError && (
+                <p className="text-xs text-red-600">{funnelError}</p>
+              )}
+              <Button
+                size="sm"
+                onClick={() => handleFunnelToggle('on')}
+                disabled={funnelToggling || !tsAuthKey.trim()}
+              >
+                {funnelToggling ? 'Setting up...' : 'Setup & Enable Funnel'}
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-xs text-muted-foreground">
+                Enable Tailscale Funnel for public HTTPS access to this agent.
+              </p>
+              {funnelError && (
+                <p className="text-xs text-red-600">{funnelError}</p>
+              )}
+              <Button
+                size="sm"
+                onClick={() => handleFunnelToggle('on')}
+                disabled={funnelToggling}
+              >
+                {funnelToggling ? 'Enabling...' : 'Enable Funnel'}
+              </Button>
+            </div>
           )}
         </div>
       )}
