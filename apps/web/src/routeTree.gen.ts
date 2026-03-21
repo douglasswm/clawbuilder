@@ -12,8 +12,14 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as MarketplaceIndexRouteImport } from './routes/marketplace/index'
+import { Route as MarketplaceSlugRouteImport } from './routes/marketplace/$slug'
 import { Route as AuthCallbackRouteImport } from './routes/auth/callback'
+import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
+import { Route as AuthenticatedDeployRouteImport } from './routes/_authenticated/deploy'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
+import { Route as AuthenticatedDeployIndexRouteImport } from './routes/_authenticated/deploy/index'
+import { Route as AuthenticatedDeploymentsDeploymentIdRouteImport } from './routes/_authenticated/deployments/$deploymentId'
 
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
@@ -29,28 +35,71 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const MarketplaceIndexRoute = MarketplaceIndexRouteImport.update({
+  id: '/marketplace/',
+  path: '/marketplace/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MarketplaceSlugRoute = MarketplaceSlugRouteImport.update({
+  id: '/marketplace/$slug',
+  path: '/marketplace/$slug',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AuthCallbackRoute = AuthCallbackRouteImport.update({
   id: '/auth/callback',
   path: '/auth/callback',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AuthenticatedSettingsRoute = AuthenticatedSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedDeployRoute = AuthenticatedDeployRouteImport.update({
+  id: '/deploy',
+  path: '/deploy',
+  getParentRoute: () => AuthenticatedRoute,
 } as any)
 const AuthenticatedDashboardRoute = AuthenticatedDashboardRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const AuthenticatedDeployIndexRoute =
+  AuthenticatedDeployIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => AuthenticatedDeployRoute,
+  } as any)
+const AuthenticatedDeploymentsDeploymentIdRoute =
+  AuthenticatedDeploymentsDeploymentIdRouteImport.update({
+    id: '/deployments/$deploymentId',
+    path: '/deployments/$deploymentId',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
+  '/deploy': typeof AuthenticatedDeployRouteWithChildren
+  '/settings': typeof AuthenticatedSettingsRoute
   '/auth/callback': typeof AuthCallbackRoute
+  '/marketplace/$slug': typeof MarketplaceSlugRoute
+  '/marketplace/': typeof MarketplaceIndexRoute
+  '/deployments/$deploymentId': typeof AuthenticatedDeploymentsDeploymentIdRoute
+  '/deploy/': typeof AuthenticatedDeployIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
+  '/settings': typeof AuthenticatedSettingsRoute
   '/auth/callback': typeof AuthCallbackRoute
+  '/marketplace/$slug': typeof MarketplaceSlugRoute
+  '/marketplace': typeof MarketplaceIndexRoute
+  '/deployments/$deploymentId': typeof AuthenticatedDeploymentsDeploymentIdRoute
+  '/deploy': typeof AuthenticatedDeployIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -58,20 +107,51 @@ export interface FileRoutesById {
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/login': typeof LoginRoute
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
+  '/_authenticated/deploy': typeof AuthenticatedDeployRouteWithChildren
+  '/_authenticated/settings': typeof AuthenticatedSettingsRoute
   '/auth/callback': typeof AuthCallbackRoute
+  '/marketplace/$slug': typeof MarketplaceSlugRoute
+  '/marketplace/': typeof MarketplaceIndexRoute
+  '/_authenticated/deployments/$deploymentId': typeof AuthenticatedDeploymentsDeploymentIdRoute
+  '/_authenticated/deploy/': typeof AuthenticatedDeployIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/login' | '/dashboard' | '/auth/callback'
+  fullPaths:
+    | '/'
+    | '/login'
+    | '/dashboard'
+    | '/deploy'
+    | '/settings'
+    | '/auth/callback'
+    | '/marketplace/$slug'
+    | '/marketplace/'
+    | '/deployments/$deploymentId'
+    | '/deploy/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/login' | '/dashboard' | '/auth/callback'
+  to:
+    | '/'
+    | '/login'
+    | '/dashboard'
+    | '/settings'
+    | '/auth/callback'
+    | '/marketplace/$slug'
+    | '/marketplace'
+    | '/deployments/$deploymentId'
+    | '/deploy'
   id:
     | '__root__'
     | '/'
     | '/_authenticated'
     | '/login'
     | '/_authenticated/dashboard'
+    | '/_authenticated/deploy'
+    | '/_authenticated/settings'
     | '/auth/callback'
+    | '/marketplace/$slug'
+    | '/marketplace/'
+    | '/_authenticated/deployments/$deploymentId'
+    | '/_authenticated/deploy/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -79,6 +159,8 @@ export interface RootRouteChildren {
   AuthenticatedRoute: typeof AuthenticatedRouteWithChildren
   LoginRoute: typeof LoginRoute
   AuthCallbackRoute: typeof AuthCallbackRoute
+  MarketplaceSlugRoute: typeof MarketplaceSlugRoute
+  MarketplaceIndexRoute: typeof MarketplaceIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -104,12 +186,40 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/marketplace/': {
+      id: '/marketplace/'
+      path: '/marketplace'
+      fullPath: '/marketplace/'
+      preLoaderRoute: typeof MarketplaceIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/marketplace/$slug': {
+      id: '/marketplace/$slug'
+      path: '/marketplace/$slug'
+      fullPath: '/marketplace/$slug'
+      preLoaderRoute: typeof MarketplaceSlugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/auth/callback': {
       id: '/auth/callback'
       path: '/auth/callback'
       fullPath: '/auth/callback'
       preLoaderRoute: typeof AuthCallbackRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_authenticated/settings': {
+      id: '/_authenticated/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof AuthenticatedSettingsRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/deploy': {
+      id: '/_authenticated/deploy'
+      path: '/deploy'
+      fullPath: '/deploy'
+      preLoaderRoute: typeof AuthenticatedDeployRouteImport
+      parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/dashboard': {
       id: '/_authenticated/dashboard'
@@ -118,15 +228,47 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedDashboardRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/deploy/': {
+      id: '/_authenticated/deploy/'
+      path: '/'
+      fullPath: '/deploy/'
+      preLoaderRoute: typeof AuthenticatedDeployIndexRouteImport
+      parentRoute: typeof AuthenticatedDeployRoute
+    }
+    '/_authenticated/deployments/$deploymentId': {
+      id: '/_authenticated/deployments/$deploymentId'
+      path: '/deployments/$deploymentId'
+      fullPath: '/deployments/$deploymentId'
+      preLoaderRoute: typeof AuthenticatedDeploymentsDeploymentIdRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
   }
 }
 
+interface AuthenticatedDeployRouteChildren {
+  AuthenticatedDeployIndexRoute: typeof AuthenticatedDeployIndexRoute
+}
+
+const AuthenticatedDeployRouteChildren: AuthenticatedDeployRouteChildren = {
+  AuthenticatedDeployIndexRoute: AuthenticatedDeployIndexRoute,
+}
+
+const AuthenticatedDeployRouteWithChildren =
+  AuthenticatedDeployRoute._addFileChildren(AuthenticatedDeployRouteChildren)
+
 interface AuthenticatedRouteChildren {
   AuthenticatedDashboardRoute: typeof AuthenticatedDashboardRoute
+  AuthenticatedDeployRoute: typeof AuthenticatedDeployRouteWithChildren
+  AuthenticatedSettingsRoute: typeof AuthenticatedSettingsRoute
+  AuthenticatedDeploymentsDeploymentIdRoute: typeof AuthenticatedDeploymentsDeploymentIdRoute
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedDashboardRoute: AuthenticatedDashboardRoute,
+  AuthenticatedDeployRoute: AuthenticatedDeployRouteWithChildren,
+  AuthenticatedSettingsRoute: AuthenticatedSettingsRoute,
+  AuthenticatedDeploymentsDeploymentIdRoute:
+    AuthenticatedDeploymentsDeploymentIdRoute,
 }
 
 const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(
@@ -138,6 +280,8 @@ const rootRouteChildren: RootRouteChildren = {
   AuthenticatedRoute: AuthenticatedRouteWithChildren,
   LoginRoute: LoginRoute,
   AuthCallbackRoute: AuthCallbackRoute,
+  MarketplaceSlugRoute: MarketplaceSlugRoute,
+  MarketplaceIndexRoute: MarketplaceIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
