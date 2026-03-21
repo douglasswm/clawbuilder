@@ -119,11 +119,25 @@ describe('hasAnyApiKey', () => {
       anthropic_key_encrypted: null,
       openai_key_encrypted: null,
       gemini_key_encrypted: null,
+      tailscale_key_encrypted: null,
     });
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const result = await hasAnyApiKey('user-1', mockSupabase as any);
     expect(result).toBe(false);
+  });
+
+  it('returns true when only tailscale key exists', async () => {
+    const mockSupabase = buildMockSupabase({
+      anthropic_key_encrypted: null,
+      openai_key_encrypted: null,
+      gemini_key_encrypted: null,
+      tailscale_key_encrypted: 'enc-tailscale',
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await hasAnyApiKey('user-1', mockSupabase as any);
+    expect(result).toBe(true);
   });
 });
 

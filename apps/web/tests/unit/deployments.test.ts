@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { setCliExecutor, parseNdjson } from '../../src/lib/server/clawmacdo';
-import { normalizeStatus, buildCliBaseEnv } from '../../src/lib/server/deployments';
+import { normalizeStatus, buildCliBaseEnv, checkTailscaleAvailable } from '../../src/lib/server/deployments';
 import {
   validateDeploymentName,
   validateRegion,
@@ -152,8 +152,40 @@ describe('buildCliBaseEnv', () => {
 
   it('returns both DO_TOKEN and BYTEPLUS_ARKMODEL_API_KEY together', () => {
     process.env = { ...originalEnv, DO_TOKEN: 'dop_v1_test123', BYTEPLUS_ARKMODEL_API_KEY: 'bp-test-key-123' };
+    delete process.env.TAILSCALE_AUTH_KEY;
     const result = buildCliBaseEnv();
     expect(result).toEqual({ DO_TOKEN: 'dop_v1_test123', BYTEPLUS_ARKMODEL_API_KEY: 'bp-test-key-123' });
+  });
+
+  it('returns TAILSCALE_AUTH_KEY when env var is set', () => {
+    process.env = { ...originalEnv, TAILSCALE_AUTH_KEY: 'tskey-auth-test123' };
+    delete process.env.DO_TOKEN;
+    delete process.env.BYTEPLUS_ARKMODEL_API_KEY;
+    const result = buildCliBaseEnv();
+    expect(result).toEqual({ TAILSCALE_AUTH_KEY: 'tskey-auth-test123' });
+  });
+
+  it('omits TAILSCALE_AUTH_KEY when empty', () => {
+    process.env = { ...originalEnv, TAILSCALE_AUTH_KEY: '' };
+    delete process.env.DO_TOKEN;
+    delete process.env.BYTEPLUS_ARKMODEL_API_KEY;
+    const result = buildCliBaseEnv();
+    expect(result).toEqual({});
+  });
+
+  it('returns all three env vars together', () => {
+    process.env = {
+      ...originalEnv,
+      DO_TOKEN: 'dop_v1_test123',
+      BYTEPLUS_ARKMODEL_API_KEY: 'bp-test-key-123',
+      TAILSCALE_AUTH_KEY: 'tskey-auth-test123',
+    };
+    const result = buildCliBaseEnv();
+    expect(result).toEqual({
+      DO_TOKEN: 'dop_v1_test123',
+      BYTEPLUS_ARKMODEL_API_KEY: 'bp-test-key-123',
+      TAILSCALE_AUTH_KEY: 'tskey-auth-test123',
+    });
   });
 });
 
@@ -259,5 +291,26 @@ describe('parseNdjson handles deploy output', () => {
     for (let i = 1; i < result.length; i++) {
       expect(result[i].step).toBeGreaterThan(result[i - 1].step as number);
     }
+  });
+});
+
+describe('checkTailscaleAvailable', () => {
+  const originalEnv = process.env;
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  it('returns available: true when TAILSCALE_AUTH_KEY is set', () => {
+    process.env = { ...originalEnv, TAILSCALE_AUTH_KEY: 'tskey-auth-test123' };
+    const result = checkTailscaleAvailable();
+    expect(result).toEqual({ available: true });
+  });
+
+  it('returns available: false when TAILSCALE_AUTH_KEY is missing', () => {
+    process.env = { ...originalEnv };
+    delete process.env.TAILSCALE_AUTH_KEY;
+    const result = checkTailscaleAvailable();
+    expect(result).toEqual({ available: false });
   });
 });
