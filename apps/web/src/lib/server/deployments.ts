@@ -164,12 +164,14 @@ export const createDeployment = createServerFn({ method: 'POST' })
     if (resolvedSnapshotName) {
       // When using snapshotName directly (no templateId), validate against approved templates
       if (!templateId) {
-        const { count: templateCount } = await supabase
+        const { data: matchingTemplates } = await supabase
           .from('agent_templates')
-          .select('id', { count: 'exact', head: true })
-          .eq('snapshot_name', resolvedSnapshotName)
+          .select('id, provider_snapshots', { count: 'exact', head: false })
           .eq('is_active', true);
-        if (!templateCount || templateCount === 0) {
+        const found = (matchingTemplates ?? []).some((t: { provider_snapshots: Record<string, string> | null }) =>
+          t.provider_snapshots && Object.values(t.provider_snapshots).includes(resolvedSnapshotName)
+        );
+        if (!found) {
           throw new Error(`Invalid snapshot: "${resolvedSnapshotName}" is not an approved agent template.`);
         }
       }
