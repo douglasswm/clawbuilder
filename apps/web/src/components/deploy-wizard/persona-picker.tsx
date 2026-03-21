@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useCallback } from 'react';
 import { createServerFn } from '@tanstack/react-start';
 import {
   Dialog,
@@ -10,6 +10,7 @@ import { Input } from '@workspace/ui/components/input';
 import { Badge } from '@workspace/ui/components/badge';
 import { Skeleton } from '@workspace/ui/components/skeleton';
 import { Button } from '@workspace/ui/components/button';
+import { useTemplateList } from '../../hooks/use-template-list';
 
 export interface SelectedPersona {
   slug: string;
@@ -37,6 +38,9 @@ interface PersonaPickerProps {
   disabled?: boolean;
 }
 
+const fetchFn = ({ query, page }: { query: string; page: number }) =>
+  fetchAgentTemplates({ data: { query, page } });
+
 export function PersonaPicker({
   mode = 'dialog',
   selectedSlug,
@@ -45,54 +49,30 @@ export function PersonaPicker({
   onSelect,
   disabled,
 }: PersonaPickerProps) {
-  const [query, setQuery] = useState('');
-  const [templates, setTemplates] = useState<
-    Array<{ id: string; name: string; description: string | null; snapshot_name: string }>
-  >([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [page, setPage] = useState(1);
-  const [total, setTotal] = useState(0);
-  const [pageSize, setPageSize] = useState(20);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   const isActive = mode === 'inline' ? true : !!open;
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
-  const loadTemplates = useCallback((q: string, p: number) => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const result = await fetchAgentTemplates({ data: { query: q, page: p } });
-        setTemplates(result.data);
-        setTotal(result.total);
-        setPageSize(result.pageSize);
-      } catch {
-        setError('Failed to load agent templates');
-        setTemplates([]);
-      } finally {
-        setLoading(false);
-      }
-    }, 300);
-  }, []);
+  const {
+    query,
+    setQuery,
+    templates,
+    loading,
+    error,
+    page,
+    setPage,
+    totalPages,
+  } = useTemplateList({
+    fetchFn,
+    enabled: isActive,
+  });
 
-  useEffect(() => {
-    if (!isActive) return;
-    loadTemplates(query, page);
-  }, [isActive, query, page, loadTemplates]);
-
-  // Reset to page 1 when query changes
-  useEffect(() => {
-    setPage(1);
-  }, [query]);
-
-  const handleSelect = (template: (typeof templates)[0]) => {
-    if (disabled || loading) return;
-    onSelect({ slug: template.snapshot_name, name: template.name });
-    if (mode === 'dialog') onOpenChange?.(false);
-  };
+  const handleSelect = useCallback(
+    (template: (typeof templates)[0]) => {
+      if (disabled || loading) return;
+      onSelect({ slug: template.snapshot_name, name: template.name });
+      if (mode === 'dialog') onOpenChange?.(false);
+    },
+    [disabled, loading, onSelect, mode, onOpenChange],
+  );
 
   const selectedTemplate = selectedSlug
     ? templates.find((t) => t.snapshot_name === selectedSlug)
