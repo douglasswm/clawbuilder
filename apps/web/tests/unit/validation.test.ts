@@ -4,16 +4,19 @@ import {
   validateRegion,
   validateSize,
   validateModel,
+  validateProvider,
   generateDeploymentName,
   DEPLOYMENT_NAME_REGEX,
   REGIONS,
   SIZES,
+  PROVIDERS,
   MODELS,
   REGION_LABELS,
   SIZE_LABELS,
+  PROVIDER_LABELS,
   MODEL_LABELS,
 } from '../../src/lib/validation';
-import type { Region, Size, Model } from '../../src/lib/validation';
+import type { Region, Size, Provider, Model } from '../../src/lib/validation';
 
 describe('validateDeploymentName', () => {
   it('returns valid for a valid name', () => {
@@ -148,6 +151,34 @@ describe('validateModel', () => {
   });
 });
 
+describe('validateProvider', () => {
+  it('returns true for every provider in PROVIDERS', () => {
+    for (const provider of PROVIDERS) {
+      expect(validateProvider(provider)).toBe(true);
+    }
+  });
+
+  it('returns true for digitalocean', () => {
+    expect(validateProvider('digitalocean')).toBe(true);
+  });
+
+  it('returns true for aws-lightsail', () => {
+    expect(validateProvider('aws-lightsail')).toBe(true);
+  });
+
+  it('returns true for byteplus', () => {
+    expect(validateProvider('byteplus')).toBe(true);
+  });
+
+  it('returns false for an invalid provider', () => {
+    expect(validateProvider('azure')).toBe(false);
+  });
+
+  it('returns false for empty string', () => {
+    expect(validateProvider('')).toBe(false);
+  });
+});
+
 describe('DEPLOYMENT_NAME_REGEX', () => {
   it('matches valid lowercase name', () => {
     expect(DEPLOYMENT_NAME_REGEX.test('my-agent')).toBe(true);
@@ -209,6 +240,12 @@ describe('label maps', () => {
     }
   });
 
+  it('has a label for every provider', () => {
+    for (const provider of PROVIDERS) {
+      expect(PROVIDER_LABELS[provider]).toBeDefined();
+    }
+  });
+
   it('has a label for every model', () => {
     for (const model of MODELS) {
       expect(MODEL_LABELS[model]).toBeDefined();
@@ -225,6 +262,11 @@ describe('exported types', () => {
   it('Size type is assignable from a SIZES value', () => {
     const size: Size = 's-1vcpu-1gb';
     expect(size).toBe('s-1vcpu-1gb');
+  });
+
+  it('Provider type is assignable from a PROVIDERS value', () => {
+    const provider: Provider = 'digitalocean';
+    expect(provider).toBe('digitalocean');
   });
 
   it('Model type is assignable from a MODELS value', () => {

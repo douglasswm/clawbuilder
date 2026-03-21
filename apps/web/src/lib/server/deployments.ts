@@ -1,6 +1,6 @@
 import { createServerFn } from '@tanstack/react-start';
 import { getAuthenticatedClient } from './auth-helpers';
-import { validateDeploymentName, validateRegion, validateSize } from '../validation';
+import { validateDeploymentName, validateRegion, validateSize, validateProvider, PROVIDER_LABELS } from '../validation';
 
 export const TERMINAL_STATUSES = new Set<Deployment['status']>(['running', 'failed', 'destroyed']);
 
@@ -22,6 +22,8 @@ export interface CreateDeploymentInput {
   personaSlug?: string;
   personaName?: string;
   snapshotName?: string;
+  templateId?: string;
+  provider?: string;
 }
 
 export interface Deployment {
@@ -85,13 +87,15 @@ export const createDeployment = createServerFn({ method: 'POST' })
   .inputValidator((data: CreateDeploymentInput) => data)
   .handler(async (ctx) => {
     const { supabase, user } = await getAuthenticatedClient();
-    const { name, region, size, personaSlug, personaName, snapshotName } = ctx.data;
+    const { name, region, size, personaSlug, personaName, snapshotName, templateId, provider: rawProvider } = ctx.data;
+    const provider = rawProvider ?? 'digitalocean';
 
     // Server-side validation
     const nameValidation = validateDeploymentName(name);
     if (!nameValidation.valid) throw new Error(nameValidation.error);
     if (!validateRegion(region)) throw new Error(`Invalid region: ${region}`);
     if (!validateSize(size)) throw new Error(`Invalid size: ${size}`);
+    if (rawProvider && !validateProvider(rawProvider)) throw new Error(`Invalid provider: ${rawProvider}`);
 
     if (!process.env.DO_TOKEN) {
       throw new Error('DigitalOcean token is not configured. Contact your administrator.');
@@ -99,6 +103,35 @@ export const createDeployment = createServerFn({ method: 'POST' })
 
     if (!user.email) {
       throw new Error('Your account has no email address. Please sign in with Google.');
+    }
+
+    // Resolve snapshot from template if templateId is provided
+    let resolvedSnapshotName = snapshotName;
+    let resolvedTemplateId: string | undefined = templateId;
+    if (templateId) {
+      const { data: template, error: templateError } = await supabase
+        .from('agent_templates')
+        .select('id, provider_snapshots')
+        .eq('id', templateId)
+        .eq('is_active', true)
+        .maybeSingle();
+
+      if (templateError) throw new Error(templateError.message);
+      if (!template) throw new Error('Template not found or is not active.');
+
+      const providerSnapshots = (template.provider_snapshots ?? {}) as Record<string, string>;
+      const templateSnapshot = providerSnapshots[provider];
+
+      if (!templateSnapshot) {
+        const availableProviders = Object.keys(providerSnapshots)
+          .map((p) => PROVIDER_LABELS[p] ?? p)
+          .join(', ');
+        throw new Error(
+          `Template is not available for ${PROVIDER_LABELS[provider] ?? provider}. Available providers: ${availableProviders}`
+        );
+      }
+
+      resolvedSnapshotName = templateSnapshot;
     }
 
     const platformModel = process.env.PLATFORM_DEFAULT_MODEL || null;
@@ -116,6 +149,7 @@ export const createDeployment = createServerFn({ method: 'POST' })
         primary_model: platformModel,
         persona_slug: personaSlug ?? null,
         persona_name: personaName ?? null,
+        template_id: resolvedTemplateId ?? null,
       })
       .select()
       .single();
@@ -127,15 +161,17 @@ export const createDeployment = createServerFn({ method: 'POST' })
       throw new Error(insertError.message);
     }
 
-    if (snapshotName) {
-      // Validate snapshot name against approved agent templates
-      const { count: templateCount } = await supabase
-        .from('agent_templates')
-        .select('id', { count: 'exact', head: true })
-        .eq('snapshot_name', snapshotName)
-        .eq('is_active', true);
-      if (!templateCount || templateCount === 0) {
-        throw new Error(`Invalid snapshot: "${snapshotName}" is not an approved agent template.`);
+    if (resolvedSnapshotName) {
+      // When using snapshotName directly (no templateId), validate against approved templates
+      if (!templateId) {
+        const { count: templateCount } = await supabase
+          .from('agent_templates')
+          .select('id', { count: 'exact', head: true })
+          .eq('snapshot_name', resolvedSnapshotName)
+          .eq('is_active', true);
+        if (!templateCount || templateCount === 0) {
+          throw new Error(`Invalid snapshot: "${resolvedSnapshotName}" is not an approved agent template.`);
+        }
       }
 
       // Snapshot restore via clawmacdo CLI
@@ -144,7 +180,7 @@ export const createDeployment = createServerFn({ method: 'POST' })
 
       const cliArgs = [
         'do-restore',
-        '--snapshot-name', snapshotName,
+        '--snapshot-name', resolvedSnapshotName,
         '--region', region,
         '--size', size,
       ];

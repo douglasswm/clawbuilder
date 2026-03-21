@@ -8,11 +8,20 @@ export const SIZES = [
   's-1vcpu-1gb', 's-1vcpu-2gb', 's-2vcpu-2gb', 's-2vcpu-4gb', 's-4vcpu-8gb'
 ] as const;
 
+export const PROVIDERS = ['digitalocean', 'aws-lightsail', 'byteplus'] as const;
+
 export const MODELS = ['anthropic', 'openai', 'gemini', 'byteplus-arkmodel'] as const;
 
 export type Region = typeof REGIONS[number];
 export type Size = typeof SIZES[number];
+export type Provider = typeof PROVIDERS[number];
 export type Model = typeof MODELS[number];
+
+export const PROVIDER_LABELS: Record<string, string> = {
+  'digitalocean': 'DigitalOcean',
+  'aws-lightsail': 'AWS Lightsail',
+  'byteplus': 'BytePlus',
+};
 
 export const REGION_LABELS: Record<string, string> = {
   nyc1: 'New York 1', nyc3: 'New York 3', sfo3: 'San Francisco 3',
@@ -65,6 +74,10 @@ export function validateRegion(region: string): boolean {
 
 export function validateSize(size: string): boolean {
   return (SIZES as readonly string[]).includes(size);
+}
+
+export function validateProvider(provider: string): boolean {
+  return (PROVIDERS as readonly string[]).includes(provider);
 }
 
 export function validateModel(model: string): boolean {
