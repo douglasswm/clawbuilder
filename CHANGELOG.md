@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.2.0] - 2026-03-22
+
+### Added
+- Per-user Tailscale auth keys stored encrypted in `user_api_keys` table (AES-256-GCM)
+- Tailscale Auth Key input field on Settings page with masked display
+- `isTailscaleAvailable` server function checking user key OR platform key
+- Server-side snapshot validation against `agent_templates` before restore
+- System architecture documentation (`docs/architecture.md`)
+- Unit tests for Tailscale key in `buildCliBaseEnv`, `checkTailscaleAvailable`, and `hasAnyApiKey`
+
+### Changed
+- Tailscale Funnel uses per-user encrypted key with platform `TAILSCALE_AUTH_KEY` as fallback
+- Simplified deployment detail Funnel UI: removed user-provided auth key input form
+- Funnel card always shows "Turn Off" when funnel is active, regardless of key availability
+- `DO_TOKEN` passed via environment variable instead of CLI argument (prevents log leakage)
+
+### Fixed
+- Tailscale Funnel "No deploy records found" error by switching to environment-based auth
+- `hasAnyApiKey` missing `tailscale_key_encrypted` column check
+- `pollDeploymentStatus` silently ignoring non-zero CLI exit codes
+- `persona_pushed` not reflected in poll response after successful push
+
 ## [0.2.1.0] - 2026-03-18
 
 ### Added
