@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.3.0] - 2026-03-22
+
+### Added
+- Public marketplace browse page (`/marketplace`) with category filter, search, and template card grid
+- Template detail page (`/marketplace/$slug`) with provider badges and deploy CTA
+- Multi-cloud provider support: `provider_snapshots` JSONB column replaces `snapshot_name` on `agent_templates`
+- Provider selector in deploy wizard with URL param pre-fill (`/deploy?template=<slug>&provider=<provider>`)
+- `marketplace_templates` Postgres VIEW for public read access without exposing sensitive columns
+- Deploy count trigger: auto-increments on `agent_templates` when deployment reaches `running` status
+- `listMarketplaceTemplates` and `getMarketplaceTemplateBySlug` public server functions (no auth required)
+- `useTemplateList` reusable hook extracted from PersonaPicker (DRY refactor)
+- Provider validation: `PROVIDERS`, `SUPPORTED_PROVIDERS`, `PROVIDER_LABELS`, `validateProvider()`
+- `template_id` foreign key on `deployments` table linking deploys to source templates
+- 8 new seed templates (10 total): Customer Support, Sales Outreach, Content Writer, Code Review, Data Analyst, Meeting Scheduler, Research Agent, Email Assistant
+- Partial index on `agent_templates (is_active, is_published)` for marketplace query performance
+
+### Changed
+- `agent_templates` schema: added `slug`, `category`, `provider_snapshots`, `display_metadata`, `is_published`, `deploy_count`; dropped `snapshot_name`
+- `createDeployment` accepts `templateId` and `provider` params for template-based deploys
+- PersonaPicker uses `slug` instead of `snapshot_name` for template identification
+- RLS policies: marketplace VIEW is publicly readable; base table requires authentication
+- Deploy wizard supports URL search params for marketplace deep linking
+- Provider selector gated to `SUPPORTED_PROVIDERS` (currently DigitalOcean only) with "Coming Soon" for unsupported providers
+
+### Fixed
+- Hardcoded `'digitalocean'` provider in deployment INSERT now uses user-selected provider
+- Snapshot validation updated to use `provider_snapshots` JSONB after `snapshot_name` column drop
+- Search wildcards (`%`, `_`) escaped in marketplace ilike queries
+
 ## [0.2.2.0] - 2026-03-22
 
 ### Added
