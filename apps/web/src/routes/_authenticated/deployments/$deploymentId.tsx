@@ -192,26 +192,26 @@ function DeploymentDetailPage() {
   const isActive = !TERMINAL_STATUSES.has(deployment.status);
   const canDestroy = !['destroyed', 'destroying'].includes(deployment.status);
 
-  // Funnel card visibility: show when running AND (funnel is active OR platform key available)
-  const showFunnelCard = deployment.status === 'running' && (!!deployment.funnel_url || tailscaleAvailable !== false);
+  // Funnel card visibility: always show when running
+  const showFunnelCard = deployment.status === 'running';
 
   return (
     <div className="p-6 space-y-6 max-w-2xl">
-      <div className="flex items-start justify-between">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-semibold font-mono">{deployment.name}</h1>
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-semibold font-mono break-words">{deployment.name}</h1>
+          <div className="flex items-center gap-2 mt-1">
             <StatusBadge status={deployment.status} />
+            <span className="text-sm text-muted-foreground">
+              Created {new Date(deployment.created_at).toLocaleDateString()}
+            </span>
           </div>
-          <p className="text-sm text-muted-foreground mt-1">
-            Created {new Date(deployment.created_at).toLocaleDateString()}
-          </p>
         </div>
         {canDestroy && (
           <Button
             variant="outline"
             onClick={() => setShowDestroyConfirm(true)}
-            className="text-red-600 hover:text-red-700 border-red-200 hover:border-red-300"
+            className="shrink-0 text-red-600 hover:text-red-700 border-red-200 hover:border-red-300"
           >
             Destroy
           </Button>
@@ -301,9 +301,13 @@ function DeploymentDetailPage() {
               </Button>
             </div>
           ) : tailscaleAvailable === false ? (
-            <p className="text-xs text-muted-foreground">
-              Tailscale Funnel is not configured for this platform.
-            </p>
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">
+                Add your Tailscale auth key in{' '}
+                <a href="/settings" className="text-blue-600 hover:underline">Settings</a>{' '}
+                to enable public HTTPS access via Tailscale Funnel.
+              </p>
+            </div>
           ) : (
             <div className="space-y-3">
               <p className="text-xs text-muted-foreground">
