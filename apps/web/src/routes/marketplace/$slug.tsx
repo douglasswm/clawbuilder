@@ -11,6 +11,7 @@ import {
   SelectValue,
 } from '@workspace/ui/components/select';
 import { ArrowLeft, Rocket } from '@phosphor-icons/react';
+import { SUPPORTED_PROVIDERS } from '../../lib/validation';
 import type { MarketplaceTemplate } from '../../lib/server/marketplace';
 
 export const Route = createFileRoute('/marketplace/$slug')({
@@ -153,45 +154,64 @@ function TemplateDetailPage() {
       )}
 
       {/* Deploy section */}
-      <div className="rounded-lg border border-border p-6 space-y-4">
-        <h2 className="text-lg font-medium">Deploy This Agent</h2>
+      {(() => {
+        const supportedProviders = template.providers.filter((p) => SUPPORTED_PROVIDERS.includes(p));
+        const unsupportedProviders = template.providers.filter((p) => !SUPPORTED_PROVIDERS.includes(p));
 
-        {template.providers.length > 1 && (
-          <div className="space-y-2">
-            <label className="text-sm font-medium" htmlFor="provider-select">
-              Select Provider
-            </label>
-            <Select value={selectedProvider} onValueChange={setSelectedProvider}>
-              <SelectTrigger id="provider-select" className="w-full max-w-xs">
-                <SelectValue placeholder="Select a provider" />
-              </SelectTrigger>
-              <SelectContent>
-                {template.providers.map((provider) => (
-                  <SelectItem key={provider} value={provider}>
-                    {PROVIDER_LABELS[provider] ?? provider}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+        return (
+          <div className="rounded-lg border border-border p-6 space-y-4">
+            <h2 className="text-lg font-medium">Deploy This Agent</h2>
+
+            {supportedProviders.length > 1 && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium" htmlFor="provider-select">
+                  Select Provider
+                </label>
+                <Select value={selectedProvider} onValueChange={setSelectedProvider}>
+                  <SelectTrigger id="provider-select" className="w-full max-w-xs">
+                    <SelectValue placeholder="Select a provider" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {supportedProviders.map((provider) => (
+                      <SelectItem key={provider} value={provider}>
+                        {PROVIDER_LABELS[provider] ?? provider}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {supportedProviders.length === 1 && (
+              <p className="text-sm text-muted-foreground">
+                Provider: {PROVIDER_LABELS[supportedProviders[0]] ?? supportedProviders[0]}
+              </p>
+            )}
+
+            {supportedProviders.length === 0 && (
+              <p className="text-sm text-muted-foreground">
+                No supported providers available for deployment yet.
+              </p>
+            )}
+
+            {unsupportedProviders.length > 0 && (
+              <p className="text-xs text-muted-foreground">
+                Coming soon: {unsupportedProviders.map((p) => PROVIDER_LABELS[p] ?? p).join(', ')}
+              </p>
+            )}
+
+            <Button asChild disabled={supportedProviders.length === 0}>
+              <a
+                href={supportedProviders.length > 0 ? `/deploy?template=${template.slug}&provider=${selectedProvider}` : '#'}
+                className="inline-flex items-center gap-2"
+              >
+                <Rocket className="h-4 w-4" />
+                Deploy This Agent
+              </a>
+            </Button>
           </div>
-        )}
-
-        {template.providers.length === 1 && (
-          <p className="text-sm text-muted-foreground">
-            Provider: {PROVIDER_LABELS[template.providers[0]] ?? template.providers[0]}
-          </p>
-        )}
-
-        <Button asChild>
-          <a
-            href={`/deploy?template=${template.slug}&provider=${selectedProvider}`}
-            className="inline-flex items-center gap-2"
-          >
-            <Rocket className="h-4 w-4" />
-            Deploy This Agent
-          </a>
-        </Button>
-      </div>
+        );
+      })()}
     </div>
   );
 }

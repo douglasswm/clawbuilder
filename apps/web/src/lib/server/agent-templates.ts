@@ -4,8 +4,9 @@ import { getAuthenticatedClient } from './auth-helpers';
 export interface AgentTemplate {
   id: string;
   name: string;
+  slug: string;
   description: string | null;
-  snapshot_name: string;
+  provider_snapshots: Record<string, string> | null;
 }
 
 export interface AgentTemplatesResult {
@@ -33,7 +34,7 @@ export const listAgentTemplates = createServerFn({ method: 'POST' })
 
     let q = supabase
       .from('agent_templates')
-      .select('id, name, description, snapshot_name', { count: 'exact' })
+      .select('id, name, slug, description, provider_snapshots', { count: 'exact' })
       .eq('is_active', true)
       .order('name', { ascending: true });
 

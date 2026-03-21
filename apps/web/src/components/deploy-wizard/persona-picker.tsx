@@ -68,7 +68,7 @@ export function PersonaPicker({
   const handleSelect = useCallback(
     (template: (typeof templates)[0]) => {
       if (disabled || loading) return;
-      onSelect({ slug: template.snapshot_name, name: template.name });
+      onSelect({ slug: template.slug, name: template.name });
       if (mode === 'dialog') onOpenChange?.(false);
     },
     [disabled, loading, onSelect, mode, onOpenChange],
@@ -138,7 +138,7 @@ export function PersonaPicker({
                 onClick={() => handleSelect(template)}
                 disabled={disabled || loading}
                 className={`text-left p-3 rounded-lg border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                  selectedSlug === template.snapshot_name
+                  selectedSlug === template.slug
                     ? 'border-primary bg-accent ring-1 ring-primary/20'
                     : 'border-border hover:border-primary hover:bg-accent'
                 }`}
@@ -150,7 +150,7 @@ export function PersonaPicker({
                   </div>
                 )}
                 <Badge variant="secondary" className="mt-2 text-xs">
-                  {template.snapshot_name}
+                  {template.slug}
                 </Badge>
               </button>
             ))}
