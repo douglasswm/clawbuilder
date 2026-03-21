@@ -17,6 +17,8 @@ function DashboardPage() {
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const perPage = 20;
 
   const fetchDeployments = () => {
     setLoading(true);
@@ -83,11 +85,45 @@ function DashboardPage() {
           <Button>New Agent</Button>
         </Link>
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {deployments.map((dep) => (
-          <DeploymentCard key={dep.id} deployment={dep} />
-        ))}
-      </div>
+      {(() => {
+        const totalPages = Math.ceil(deployments.length / perPage);
+        const start = (page - 1) * perPage;
+        const paged = deployments.slice(start, start + perPage);
+        return (
+          <>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {paged.map((dep) => (
+                <DeploymentCard key={dep.id} deployment={dep} />
+              ))}
+            </div>
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between pt-2">
+                <p className="text-sm text-muted-foreground">
+                  {start + 1}–{Math.min(start + perPage, deployments.length)} of {deployments.length} agents
+                </p>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    disabled={page === 1}
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={page === totalPages}
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
+            )}
+          </>
+        );
+      })()}
     </div>
   );
 }
