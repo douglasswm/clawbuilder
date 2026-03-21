@@ -40,7 +40,7 @@
 
 **Why:** Eliminates unnecessary CLI spawns on every poll interval; updates are instant instead of waiting up to 10 seconds.
 
-**Effort:** M
+**Effort:** M/c
 **Priority:** P2
 **Depends on:** Polling implementation (feat/clawmacdo-deploy)
 
@@ -97,6 +97,70 @@
 **Effort:** L
 **Priority:** P3
 **Depends on:** V1 single-instance deployment (feat/clawmacdo-deploy)
+
+## Marketplace
+
+### Rate limiting on public marketplace endpoint
+
+**What:** Add basic rate limiting to the public `listMarketplaceTemplates()` server function to prevent abuse from bots/scrapers.
+
+**Why:** The marketplace is the first public (no-auth) endpoint in ClawBuilder. Without rate limiting, a scraper could hammer the Supabase DB. Same pattern as the existing deployment polling rate limiting TODO.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** Marketplace feature (feat/template-marketplace)
+
+### AWS Lightsail and BytePlus CLI support in clawmacdo
+
+**What:** Add `do-restore` equivalents for AWS Lightsail and BytePlus in `clawmacdo` CLI so users can deploy templates to those providers.
+
+**Why:** The marketplace shows provider badges and the deploy wizard has a provider selector, but only DigitalOcean actually works. AWS/BytePlus deploy commands must exist in clawmacdo before users can deploy to those providers. The UI currently links to `/deploy?provider=aws-lightsail` but the CLI will fail.
+
+**Effort:** L
+**Priority:** P1
+**Depends on:** clawmacdo CLI (external dependency, read-only)
+
+### Provider-first deploy flow (US-002)
+
+**What:** Add an alternative deploy flow where the user selects a cloud provider first, then sees templates available for that provider.
+
+**Why:** User story US-002 describes a provider-first flow. The current marketplace implements template-first (US-003 only). Some users will want to choose their provider before browsing templates.
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** Marketplace feature (feat/template-marketplace)
+
+### Per-agent Stripe billing integration (US-001)
+
+**What:** Integrate Stripe-backed per-agent billing that gates deployment. Each live deployment is billed as a paid agent.
+
+**Why:** User stories US-001, US-002, US-003, and US-006 all reference per-agent billing. Currently deployments are free. Billing must be in place before commercial launch.
+
+**Context:** Stripe billing activation should be required before deployment actions are unlocked. Users without active billing can browse the marketplace but not deploy.
+
+**Effort:** XL
+**Priority:** P1
+**Depends on:** Marketplace feature, Stripe Connect setup
+
+### Golden copy template designation
+
+**What:** Mark one template as the "default golden copy" baseline OpenClaw instance (US-002). Add an `is_golden_copy` boolean or a "default" category to distinguish it in the marketplace and deploy flow.
+
+**Why:** US-002 describes a golden copy default deploy option. Currently all templates are equal — there's no way to identify the baseline.
+
+**Effort:** S
+**Priority:** P2
+**Depends on:** Marketplace feature (feat/template-marketplace)
+
+### Composite index on agent_templates for marketplace queries
+
+**What:** Add `CREATE INDEX idx_agent_templates_marketplace ON agent_templates (is_active, is_published) WHERE is_active = true AND is_published = true`.
+
+**Why:** The marketplace VIEW filters on these two booleans on every page load. Index costs nothing and prevents a performance cliff as template count grows. Public page may be hit by crawlers.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** Marketplace feature (feat/template-marketplace)
 
 ## Completed
 
