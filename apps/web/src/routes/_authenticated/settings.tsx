@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { useState, useEffect } from 'react';
 import { getUserApiKeys, saveUserApiKeys, type UserApiKeysMasked } from '../../lib/server/settings';
+import { isTailscaleAvailable } from '../../lib/server/deployments';
 import { Input } from '@workspace/ui/components/input';
 import { Label } from '@workspace/ui/components/label';
 import { Button } from '@workspace/ui/components/button';
@@ -26,6 +27,7 @@ function SettingsPage() {
   const [tailscaleKey, setTailscaleKey] = useState('');
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [tailscaleMode, setTailscaleMode] = useState<'platform' | 'user' | null>(null);
 
   useEffect(() => {
     getUserApiKeys()
@@ -34,6 +36,9 @@ function SettingsPage() {
         console.error(err);
         setLoadError(err instanceof Error ? err.message : 'Failed to load API keys.');
       });
+    isTailscaleAvailable()
+      .then((res) => setTailscaleMode(res.mode))
+      .catch(() => setTailscaleMode('user'));
   }, []);
 
   const handleSave = async (e: React.FormEvent) => {
@@ -141,7 +146,17 @@ function SettingsPage() {
             )}
 
             <div className="space-y-2 pt-4 border-t">
-              <Label htmlFor="tailscale">Tailscale Auth Key</Label>
+              {tailscaleMode === 'platform' && (
+                <p className="text-sm text-muted-foreground mb-2">
+                  New deployments use platform-managed Tailscale automatically.
+                </p>
+              )}
+              <Label htmlFor="tailscale">
+                Tailscale Auth Key
+                {tailscaleMode === 'platform' && (
+                  <span className="text-xs text-muted-foreground font-normal ml-1">(legacy deployments only)</span>
+                )}
+              </Label>
               <Input
                 id="tailscale"
                 type="password"
@@ -153,9 +168,11 @@ function SettingsPage() {
               {keys?.hasTailscaleKey && !tailscaleKey && (
                 <p className="text-xs text-muted-foreground">Key saved: {keys.tailscaleKeyMasked}</p>
               )}
-              <p className="text-xs text-muted-foreground">
-                Required for Tailscale Funnel. Each user needs their own key for network isolation.
-              </p>
+              {tailscaleMode !== 'platform' && (
+                <p className="text-xs text-muted-foreground">
+                  Required for Tailscale Funnel. Each user needs their own key for network isolation.
+                </p>
+              )}
             </div>
 
             <Button
