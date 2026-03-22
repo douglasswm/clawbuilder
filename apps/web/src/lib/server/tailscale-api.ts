@@ -7,6 +7,7 @@
  */
 
 const BASE_URL = 'https://api.tailscale.com/api/v2';
+const API_TIMEOUT_MS = 30_000;
 
 function getApiToken(): string {
   const token = process.env.TAILSCALE_API_TOKEN;
@@ -46,9 +47,10 @@ export interface TailscaleDevice {
  */
 export async function createTenantAuthKey(deploymentId: string): Promise<string> {
   const tailnet = getTailnet();
-  const res = await fetch(`${BASE_URL}/tailnet/${tailnet}/keys`, {
+  const res = await fetch(`${BASE_URL}/tailnet/${encodeURIComponent(tailnet)}/keys`, {
     method: 'POST',
     headers: authHeaders(),
+    signal: AbortSignal.timeout(API_TIMEOUT_MS),
     body: JSON.stringify({
       capabilities: {
         devices: {
@@ -78,9 +80,10 @@ export async function createTenantAuthKey(deploymentId: string): Promise<string>
 
 /** Delete a device from the platform tailnet. No-op if already deleted (404). */
 export async function deleteDevice(deviceId: string): Promise<void> {
-  const res = await fetch(`${BASE_URL}/device/${deviceId}`, {
+  const res = await fetch(`${BASE_URL}/device/${encodeURIComponent(deviceId)}`, {
     method: 'DELETE',
-    headers: authHeaders(),
+    headers: { 'Authorization': `Bearer ${getApiToken()}` },
+    signal: AbortSignal.timeout(API_TIMEOUT_MS),
   });
 
   if (res.status === 404) return; // Already removed
@@ -95,8 +98,9 @@ export async function deleteDevice(deviceId: string): Promise<void> {
 /** Find a device on the platform tailnet by hostname. Returns null if not found. */
 export async function findDeviceByHostname(hostname: string): Promise<TailscaleDevice | null> {
   const tailnet = getTailnet();
-  const res = await fetch(`${BASE_URL}/tailnet/${tailnet}/devices`, {
+  const res = await fetch(`${BASE_URL}/tailnet/${encodeURIComponent(tailnet)}/devices`, {
     headers: authHeaders(),
+    signal: AbortSignal.timeout(API_TIMEOUT_MS),
   });
 
   if (!res.ok) {

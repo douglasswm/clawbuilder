@@ -278,13 +278,16 @@ export const createDeployment = createServerFn({ method: 'POST' })
         '--customer-email', user.email,
         '--region', region,
         '--size', size,
-        '--hostname', name,
+        '--hostname', `${name}-${deployment.id.slice(0, 8)}`,
         '--detach',
         '--json',
       ];
       if (platformModel) {
         cliArgs.push('--primary-model', platformModel);
       }
+
+      const userKeys = await getDecryptedUserApiKeys(user.id, supabase);
+      const cliEnv = buildCliBaseEnv();
 
       // Platform-managed Tailscale: auto-generate auth key and add --tailscale flags
       if (platformTailscale) {
@@ -299,10 +302,11 @@ export const createDeployment = createServerFn({ method: 'POST' })
           }).eq('id', deployment.id);
           throw new Error(`Tailscale key generation failed: ${String(tsErr)}`);
         }
+      } else if (userKeys.tailscaleKey) {
+        // User-managed Tailscale: use user's own auth key
+        cliArgs.push('--tailscale', '--tailscale-auth-key', userKeys.tailscaleKey);
+        cliEnv['TAILSCALE_AUTH_KEY'] = userKeys.tailscaleKey;
       }
-
-      const userKeys = await getDecryptedUserApiKeys(user.id, supabase);
-      const cliEnv = buildCliBaseEnv();
       if (userKeys.anthropicKey) cliEnv['ANTHROPIC_API_KEY'] = userKeys.anthropicKey;
       if (userKeys.openaiKey) cliEnv['OPENAI_API_KEY'] = userKeys.openaiKey;
       if (userKeys.geminiKey) cliEnv['GEMINI_API_KEY'] = userKeys.geminiKey;
@@ -346,8 +350,8 @@ export const createDeployment = createServerFn({ method: 'POST' })
         status: 'provisioning',
         cli_deploy_id: cliDeployId ?? null,
         sandbox_dir: result.sandboxDir,
-        // For platform Tailscale: hostname matches the deploy --hostname flag (= deployment name)
-        ...(platformTailscale ? { tailscale_hostname: name } : {}),
+        // For platform Tailscale: hostname matches the deploy --hostname flag (name + UUID prefix for uniqueness)
+        ...(platformTailscale ? { tailscale_hostname: `${name}-${deployment.id.slice(0, 8)}` } : {}),
       }).eq('id', deployment.id);
     }
 
@@ -685,6 +689,10 @@ async function executeFunnelSetup(opts: {
   const tokenMatch = result.stdout.match(/Gateway Token:\s+(\S+)/);
   if (tokenMatch) gatewayToken = tokenMatch[1];
 
+  if (!funnelUrl) {
+    throw new Error('Tailscale Funnel setup succeeded (exit 0) but no public URL found in output');
+  }
+
   // Discover device ID for lifecycle management
   let deviceId: string | undefined;
   if (opts.tailscaleHostname) {
@@ -813,6 +821,12 @@ export const toggleFunnel = createServerFn({ method: 'POST' })
       }
 
       // Already configured: just turn funnel on
+      // Platform-managed re-enable needs a fresh auth key in case the device lost its session
+      if (dep.tailscale_managed) {
+        const { createTenantAuthKey } = await import('./tailscale-api');
+        const tsKey = await createTenantAuthKey(dep.id);
+        cliEnv['TAILSCALE_AUTH_KEY'] = tsKey;
+      }
       const result = await execClawmacdo(
         ['funnel-on', '--instance', ipAddress],
         { sandboxDir: dep.sandbox_dir ?? undefined, env: cliEnv, timeoutMs: 2 * 60_000 },
@@ -1164,16 +1178,20 @@ export const updateDeploymentAfterRestore = createServerFn({ method: 'POST' })
     return { success: true };
   });
 
-/** Clear the active_operation_id lock after a snapshot completes or fails. */
+/** Clear the active_operation_id lock after a snapshot completes or fails.
+ *  Uses compare-and-swap: only clears if the current lock matches the given operationId. */
 export const clearActiveOperation = createServerFn({ method: 'POST' })
-  .inputValidator((data: { deploymentId: string }) => data)
+  .inputValidator((data: { deploymentId: string; operationId?: string }) => data)
   .handler(async (ctx) => {
     const { supabase, user } = await getAuthenticatedClient();
-    const { deploymentId } = ctx.data;
+    const { deploymentId, operationId } = ctx.data;
 
-    await supabase.from('deployments').update({ active_operation_id: null })
+    let query = supabase.from('deployments').update({ active_operation_id: null })
       .eq('id', deploymentId)
       .eq('user_id', user.id);
+    if (operationId) {
+      query = query.eq('active_operation_id', operationId);
+    }
 
     return { success: true };
   });

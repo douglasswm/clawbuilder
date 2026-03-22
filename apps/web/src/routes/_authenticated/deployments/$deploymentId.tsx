@@ -94,7 +94,8 @@ function DeploymentDetailPage() {
         const next = dep as Deployment;
         if (prev.status === next.status && prev.current_step === next.current_step &&
             prev.ip_address === next.ip_address && prev.persona_pushed === next.persona_pushed &&
-            prev.error_message === next.error_message && prev.step_label === next.step_label) {
+            prev.error_message === next.error_message && prev.step_label === next.step_label &&
+            prev.tailscale_setup_status === next.tailscale_setup_status && prev.funnel_url === next.funnel_url) {
           return prev;
         }
         return next;
@@ -151,7 +152,7 @@ function DeploymentDetailPage() {
   // Clear the operation lock and reload deployment when snapshot completes or fails
   useEffect(() => {
     if (activeProgress.status === 'completed' || activeProgress.status === 'error') {
-      clearActiveOperation({ data: { deploymentId } }).finally(() => {
+      clearActiveOperation({ data: { deploymentId, operationId: activeProgress.operationId ?? undefined } }).finally(() => {
         loadDeployment();
       });
     }

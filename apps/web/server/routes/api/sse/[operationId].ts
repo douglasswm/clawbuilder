@@ -117,5 +117,9 @@ export default defineEventHandler(async (event: H3Event) => {
     // Stream closed (client disconnected or sidecar stopped)
   } finally {
     (res as unknown as NodeJS.WritableStream).end();
+    // Clear the operation lock — stream ended means the operation finished, failed, or the client disconnected
+    await supabase.from('deployments').update({ active_operation_id: null })
+      .eq('id', deployment.id)
+      .eq('active_operation_id', operationId);
   }
 });
