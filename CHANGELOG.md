@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.4.0] - 2026-03-22
+
+### Added
+- **Snapshot/restore progress tracking via SSE** — real-time progress bars for snapshot and restore operations using `clawmacdo serve` sidecar with Server-Sent Events
+- Sidecar lifecycle manager (`clawmacdo-serve.ts`) with PID tracking, health checks, startup mutex, SIGTERM/SIGINT cleanup, and automatic retry
+- SSE proxy route (`/api/sse/{operationId}`) with auth gating, UUID validation, and ownership verification
+- `useOperationSSE` hook with step parsing, 10-minute absolute timeout, toast notifications, and malformed JSON handling
+- `useSnapshotMutation` and `useRestoreMutation` hooks wiring server functions to SSE progress
+- `OperationProgressBar` component with step counter, elapsed time, expandable logs, status coloring, and dismiss
+- Create Snapshot card on deployment detail page (side-by-side with Tailscale Funnel card on desktop)
+- Dedicated `/restore` route for restoring from agent template snapshots with SSE progress
+- Auto-generated snapshot names (`{deployment}-snap-YYYYMMDD`)
+- Last operation card showing step history from clawmacdo's SQLite
+- `active_operation_id` and `last_operation_id` columns on deployments table for SSE reconnect on page reload
+- Restore flow creates Supabase deployment row before proxying to sidecar — dashboard sees restored instances immediately
+
+### Fixed
+- Deploy wizard now resolves actual snapshot name from `provider_snapshots` JSONB instead of passing template slug (which failed validation)
+- `PersonaPicker` passes full template data (`templateId`, `providerSnapshots`) to deploy form
+- `getMarketplaceTemplateBySlug` queries `agent_templates` directly to include `provider_snapshots` for deployment
+- Race condition in `createSnapshot` — atomic `WHERE active_operation_id IS NULL` claim prevents concurrent snapshots
+- Non-zero `clawmacdo track` exits now treated as deployment failures instead of silently swallowed
+- Restore snapshot validation scoped to `digitalocean` provider (not any provider in JSONB)
+- SSE proxy checks `sidecarRes.ok` before streaming (prevents forwarding error pages as SSE)
+- Sidecar PID ownership verified before trusting orphaned process on port
+- Deploy page links include required `search` params for TanStack Router validation
+
 ## [0.2.3.0] - 2026-03-22
 
 ### Added

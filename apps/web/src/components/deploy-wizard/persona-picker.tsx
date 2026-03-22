@@ -15,6 +15,8 @@ import { useTemplateList } from '../../hooks/use-template-list';
 export interface SelectedPersona {
   slug: string;
   name: string;
+  templateId: string;
+  providerSnapshots: Record<string, string> | null;
 }
 
 interface FetchInput {
@@ -68,14 +70,19 @@ export function PersonaPicker({
   const handleSelect = useCallback(
     (template: (typeof templates)[0]) => {
       if (disabled || loading) return;
-      onSelect({ slug: template.slug, name: template.name });
+      onSelect({
+        slug: template.slug,
+        name: template.name,
+        templateId: template.id,
+        providerSnapshots: template.provider_snapshots,
+      });
       if (mode === 'dialog') onOpenChange?.(false);
     },
     [disabled, loading, onSelect, mode, onOpenChange],
   );
 
   const selectedTemplate = selectedSlug
-    ? templates.find((t) => t.snapshot_name === selectedSlug)
+    ? templates.find((t) => t.slug === selectedSlug)
     : null;
 
   const content = (

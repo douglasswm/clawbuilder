@@ -60,6 +60,20 @@ const sampleTemplate = {
   description: 'A test template',
   category: 'chatbot',
   providers: ['openai', 'anthropic'],
+  provider_snapshots: null,
+  thumbnail_url: 'https://example.com/thumb.png',
+  deploy_count: 42,
+  created_at: '2026-01-01T00:00:00Z',
+};
+
+// agent_templates row shape (used by getMarketplaceTemplateBySlug which queries agent_templates directly)
+const sampleAgentTemplate = {
+  id: 't-1',
+  name: 'Test Template',
+  slug: 'test-template',
+  description: 'A test template',
+  category: 'chatbot',
+  provider_snapshots: { openai: 'snap-openai', anthropic: 'snap-anthropic' },
   thumbnail_url: 'https://example.com/thumb.png',
   deploy_count: 42,
   created_at: '2026-01-01T00:00:00Z',
@@ -153,14 +167,18 @@ describe('getMarketplaceTemplateBySlug', () => {
 
   it('returns a template for a valid slug', async () => {
     mockQueryBuilder = createQueryBuilder({
-      data: sampleTemplate,
+      data: sampleAgentTemplate,
       error: null,
     });
 
     const result = await (getMarketplaceTemplateBySlug as Function)({
       slug: 'test-template',
     });
-    expect(result).toEqual(sampleTemplate);
+    expect(result).toEqual({
+      ...sampleAgentTemplate,
+      providers: ['openai', 'anthropic'],
+      provider_snapshots: { openai: 'snap-openai', anthropic: 'snap-anthropic' },
+    });
     expect(mockQueryBuilder.eq).toHaveBeenCalledWith('slug', 'test-template');
     expect(mockQueryBuilder.maybeSingle).toHaveBeenCalled();
   });

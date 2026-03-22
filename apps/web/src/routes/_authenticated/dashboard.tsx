@@ -70,7 +70,7 @@ function DashboardPage() {
       <div className="flex flex-col items-center justify-center h-full min-h-[60vh] gap-4">
         <p className="text-xl font-medium">{greeting}!</p>
         <p className="text-muted-foreground">Create your first agent to get started.</p>
-        <Link to="/deploy">
+        <Link to="/deploy" search={{ template: undefined, provider: undefined }}>
           <Button>Create an Agent</Button>
         </Link>
       </div>
@@ -81,7 +81,7 @@ function DashboardPage() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">{greeting}!</h1>
-        <Link to="/deploy">
+        <Link to="/deploy" search={{ template: undefined, provider: undefined }}>
           <Button>New Agent</Button>
         </Link>
       </div>

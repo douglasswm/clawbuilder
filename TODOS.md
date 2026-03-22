@@ -162,6 +162,28 @@
 **Priority:** P3
 **Depends on:** Marketplace feature (feat/template-marketplace)
 
+## Snapshot/Restore
+
+### Migrate deploy flow to clawmacdo serve sidecar
+
+**What:** Unify the deploy flow to use the clawmacdo serve sidecar + SSE instead of CLI spawning + polling. Currently deploys use `execClawmacdo` directly while snapshot/restore uses the sidecar — dual integration pattern.
+
+**Why:** Single integration pattern, cleaner architecture. Deploys would also get real-time SSE progress instead of 10-second polling.
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** Snapshot/restore SSE feature (v0.2.4.0)
+
+### Supabase-backed operation history
+
+**What:** Move operation history from clawmacdo's SQLite to a Supabase `operations` table. Currently the "last operation" card depends on the sidecar's local SQLite.
+
+**Why:** SQLite data is lost in ephemeral containers. A Supabase table makes history durable, queryable, and enables the full operations dashboard vision.
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** Snapshot/restore SSE feature (v0.2.4.0)
+
 ## Completed
 
 ### E2E test infrastructure for auth flow
