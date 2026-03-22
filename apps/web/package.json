@@ -24,6 +24,7 @@
     "@tanstack/router-plugin": "^1.132.0",
     "@workspace/ui": "workspace:*",
     "clawmacdo": "^0.28.0",
+    "h3": "2.0.1-rc.18",
     "nitro": "latest",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
