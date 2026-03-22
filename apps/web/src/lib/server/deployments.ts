@@ -1,4 +1,5 @@
 import { createServerFn } from '@tanstack/react-start';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { getAuthenticatedClient } from './auth-helpers';
 import { validateDeploymentName, validateRegion, validateSize, validateProvider, PROVIDER_LABELS } from '../validation';
 
@@ -346,17 +347,54 @@ export const createDeployment = createServerFn({ method: 'POST' })
         throw new Error(result.stderr || 'Deploy command failed');
       }
 
+      const deployHostname = `${name}-${deployment.id.slice(0, 8)}`;
       await supabase.from('deployments').update({
         status: 'provisioning',
         cli_deploy_id: cliDeployId ?? null,
         sandbox_dir: result.sandboxDir,
-        // For platform Tailscale: hostname matches the deploy --hostname flag (name + UUID prefix for uniqueness)
-        ...(platformTailscale ? { tailscale_hostname: `${name}-${deployment.id.slice(0, 8)}` } : {}),
+        // Store the hostname used in --hostname flag so snapshot/destroy can resolve the droplet
+        droplet_hostname: deployHostname,
+        ...(platformTailscale ? { tailscale_hostname: deployHostname } : {}),
       }).eq('id', deployment.id);
     }
 
     return { deploymentId: deployment.id };
   });
+
+/** Attempt auto-funnel setup for a running deployment that still needs it.
+ *  Uses compare-and-swap to prevent concurrent attempts. */
+async function attemptAutoFunnel(
+  dep: Deployment, targetIp: string, supabase: SupabaseClient
+): Promise<Deployment> {
+  const { count: funnelClaim } = await supabase
+    .from('deployments')
+    .update({ tailscale_setup_status: 'in_progress' }, { count: 'exact' })
+    .eq('id', dep.id)
+    .eq('tailscale_setup_status', 'pending');
+
+  if (!funnelClaim || funnelClaim === 0) return dep;
+
+  const updates: Partial<Deployment> = {};
+  const cliEnv = buildCliBaseEnv();
+  try {
+    const funnelResult = await executeFunnelSetup({
+      ipAddress: targetIp,
+      sandboxDir: dep.sandbox_dir ?? undefined,
+      cliEnv,
+      tailscaleHostname: dep.tailscale_hostname ?? dep.droplet_hostname ?? undefined,
+    });
+    updates.tailscale_setup_status = 'configured';
+    updates.tailscale_configured = true;
+    if (funnelResult.funnelUrl) updates.funnel_url = funnelResult.funnelUrl;
+    if (funnelResult.gatewayToken) updates.gateway_token = funnelResult.gatewayToken;
+    if (funnelResult.deviceId) updates.tailscale_device_id = funnelResult.deviceId;
+  } catch (err) {
+    console.error('[attemptAutoFunnel] Failed:', err);
+    updates.tailscale_setup_status = 'failed';
+  }
+  await supabase.from('deployments').update(updates).eq('id', dep.id);
+  return { ...dep, ...updates };
+}
 
 /** Poll deployment status via clawmacdo track */
 export const pollDeploymentStatus = createServerFn({ method: 'POST' })
@@ -377,8 +415,10 @@ export const pollDeploymentStatus = createServerFn({ method: 'POST' })
 
     const dep = deployment as Deployment;
 
-    // If already terminal, return as-is
-    if (TERMINAL_STATUSES.has(dep.status)) {
+    // If already terminal and no pending funnel setup, return as-is
+    const needsFunnelSetup = dep.tailscale_managed &&
+      (dep.tailscale_setup_status === 'pending' || dep.tailscale_setup_status === 'in_progress');
+    if (TERMINAL_STATUSES.has(dep.status) && !needsFunnelSetup) {
       return dep;
     }
 
@@ -400,6 +440,10 @@ export const pollDeploymentStatus = createServerFn({ method: 'POST' })
 
     // No cli_deploy_id yet — can't track
     if (!dep.cli_deploy_id) {
+      // If already running but needs funnel setup, attempt it directly
+      if (dep.status === 'running' && needsFunnelSetup && dep.ip_address) {
+        return await attemptAutoFunnel(dep, dep.ip_address, supabase);
+      }
       return dep;
     }
 
@@ -666,11 +710,34 @@ async function executeFunnelSetup(opts: {
   const tsKey = await createTenantAuthKey('platform-funnel-setup');
   const env = { ...opts.cliEnv, TAILSCALE_AUTH_KEY: tsKey };
 
-  const result = await execClawmacdo(
-    ['tailscale-funnel', '--instance', opts.ipAddress],
-    { sandboxDir: opts.sandboxDir, env, timeoutMs: 5 * 60_000 },
-  );
+  // Retry with backoff: newly provisioned droplets need time for SSH to become available.
+  // DigitalOcean assigns the IP before sshd starts (~30-90s after creation).
+  const MAX_RETRIES = 5;
+  const BASE_DELAY_MS = 10_000; // 10s, 20s, 40s, 80s, 160s
+  let lastResult;
 
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1);
+      console.log(`[executeFunnelSetup] SSH not ready, retrying in ${delay / 1000}s (attempt ${attempt + 1}/${MAX_RETRIES + 1})`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+
+    lastResult = await execClawmacdo(
+      ['tailscale-funnel', '--instance', opts.ipAddress],
+      { sandboxDir: opts.sandboxDir, env, timeoutMs: 5 * 60_000 },
+    );
+
+    if (lastResult.code === 0) break;
+
+    // Only retry on SSH connection errors (newly provisioned droplet not ready yet)
+    const isConnectionRefused = /Connection refused|Connection reset|No route to host|timed out/i.test(
+      lastResult.stderr,
+    );
+    if (!isConnectionRefused) break; // Non-SSH error — don't retry
+  }
+
+  const result = lastResult!;
   if (result.code !== 0) {
     throw new Error(result.stderr || 'Tailscale Funnel setup failed');
   }
@@ -872,10 +939,11 @@ export const toggleFunnel = createServerFn({ method: 'POST' })
 /** Check if Tailscale Funnel is available — platform mode or user key. */
 export const isTailscaleAvailable = createServerFn({ method: 'GET' }).handler(async () => {
   const { isPlatformTailscaleEnabled } = await import('./tailscale-api');
-  if (isPlatformTailscaleEnabled()) {
-    return { available: true, mode: 'platform' as const };
-  }
+  const platformEnabled = isPlatformTailscaleEnabled();
 
+  // Always check user key availability — legacy deployments (tailscale_managed=false)
+  // need the user's own key even when platform Tailscale is enabled
+  let userKeyAvailable = false;
   try {
     const { supabase, user } = await getAuthenticatedClient();
     const { data } = await supabase
@@ -883,10 +951,15 @@ export const isTailscaleAvailable = createServerFn({ method: 'GET' }).handler(as
       .select('tailscale_key_encrypted')
       .eq('user_id', user.id)
       .maybeSingle();
-    return { available: !!data?.tailscale_key_encrypted, mode: 'user' as const };
+    userKeyAvailable = !!data?.tailscale_key_encrypted;
   } catch {
-    return { available: false, mode: 'user' as const };
+    // Non-critical
   }
+
+  if (platformEnabled) {
+    return { available: true, mode: 'platform' as const, userKeyAvailable };
+  }
+  return { available: userKeyAvailable, mode: 'user' as const, userKeyAvailable };
 });
 
 /** Resolve a DigitalOcean droplet by hostname/name — returns both ID and IP. */
@@ -1192,6 +1265,8 @@ export const clearActiveOperation = createServerFn({ method: 'POST' })
     if (operationId) {
       query = query.eq('active_operation_id', operationId);
     }
+
+    await query;
 
     return { success: true };
   });

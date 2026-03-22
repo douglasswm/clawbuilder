@@ -107,19 +107,25 @@ export default defineEventHandler(async (event: H3Event) => {
     throw createError({ statusCode: 500, statusMessage: 'No response stream available' });
   }
 
+  let streamCompletedNormally = false;
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       (res as unknown as NodeJS.WritableStream).write(value);
     }
+    streamCompletedNormally = true;
   } catch {
     // Stream closed (client disconnected or sidecar stopped)
   } finally {
     (res as unknown as NodeJS.WritableStream).end();
-    // Clear the operation lock — stream ended means the operation finished, failed, or the client disconnected
-    await supabase.from('deployments').update({ active_operation_id: null })
-      .eq('id', deployment.id)
-      .eq('active_operation_id', operationId);
+    // Only clear the operation lock if the sidecar stream completed normally (not on client disconnect).
+    // On client disconnect the sidecar job may still be running — the frontend's clearActiveOperation
+    // call handles cleanup after it observes a completed/error status via polling.
+    if (streamCompletedNormally) {
+      await supabase.from('deployments').update({ active_operation_id: null })
+        .eq('id', deployment.id)
+        .eq('active_operation_id', operationId);
+    }
   }
 });
