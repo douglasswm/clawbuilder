@@ -225,14 +225,48 @@ export const createDeployment = createServerFn({ method: 'POST' })
       const deployIdMatch = result.stdout.match(/Deploy ID:\s+(\S+)/);
 
       const restoreHostname = hostnameMatch?.[1] ?? null;
+      const restoreIp = ipMatch?.[1] ?? null;
       await supabase.from('deployments').update({
         status: 'running',
-        ip_address: ipMatch?.[1] ?? null,
+        ip_address: restoreIp,
         droplet_hostname: restoreHostname,
         cli_deploy_id: deployIdMatch?.[1] ?? null,
         sandbox_dir: result.sandboxDir,
         ...(platformTailscale && restoreHostname ? { tailscale_hostname: restoreHostname } : {}),
       }).eq('id', deployment.id);
+
+      // Auto-enable Funnel for platform-managed sync restores (do-restore path)
+      if (platformTailscale && restoreIp) {
+        // Fire-and-forget: don't block the deploy response. Poll will pick up status.
+        const cliEnv = buildCliBaseEnv();
+        supabase.from('deployments')
+          .update({ tailscale_setup_status: 'in_progress' }, { count: 'exact' })
+          .eq('id', deployment.id)
+          .eq('tailscale_setup_status', 'pending')
+          .then(async ({ count: claimed }) => {
+            if (!claimed || claimed === 0) return;
+            try {
+              const funnelResult = await executeFunnelSetup({
+                ipAddress: restoreIp,
+                sandboxDir: result.sandboxDir,
+                cliEnv,
+                tailscaleHostname: restoreHostname ?? undefined,
+              });
+              const funnelUpdates: Record<string, unknown> = {
+                tailscale_setup_status: 'configured',
+                tailscale_configured: true,
+              };
+              if (funnelResult.funnelUrl) funnelUpdates.funnel_url = funnelResult.funnelUrl;
+              if (funnelResult.gatewayToken) funnelUpdates.gateway_token = funnelResult.gatewayToken;
+              if (funnelResult.deviceId) funnelUpdates.tailscale_device_id = funnelResult.deviceId;
+              await supabase.from('deployments').update(funnelUpdates).eq('id', deployment.id);
+            } catch (err) {
+              console.error('[createDeployment] Sync restore auto-funnel failed:', err);
+              await supabase.from('deployments').update({ tailscale_setup_status: 'failed' }).eq('id', deployment.id);
+            }
+          })
+          .then(() => {}, (err: unknown) => console.error('[createDeployment] Funnel claim failed:', err));
+      }
     } else {
       // Fresh deploy via clawmacdo CLI
       const { execClawmacdo } = await import('./clawmacdo');
@@ -254,9 +288,17 @@ export const createDeployment = createServerFn({ method: 'POST' })
 
       // Platform-managed Tailscale: auto-generate auth key and add --tailscale flags
       if (platformTailscale) {
-        const { createTenantAuthKey } = await import('./tailscale-api');
-        const tsAuthKey = await createTenantAuthKey(deployment.id);
-        cliArgs.push('--tailscale', '--tailscale-auth-key', tsAuthKey);
+        try {
+          const { createTenantAuthKey } = await import('./tailscale-api');
+          const tsAuthKey = await createTenantAuthKey(deployment.id);
+          cliArgs.push('--tailscale', '--tailscale-auth-key', tsAuthKey);
+        } catch (tsErr) {
+          await supabase.from('deployments').update({
+            status: 'failed',
+            error_message: `Tailscale key generation failed: ${String(tsErr)}`,
+          }).eq('id', deployment.id);
+          throw new Error(`Tailscale key generation failed: ${String(tsErr)}`);
+        }
       }
 
       const userKeys = await getDecryptedUserApiKeys(user.id, supabase);
@@ -304,6 +346,8 @@ export const createDeployment = createServerFn({ method: 'POST' })
         status: 'provisioning',
         cli_deploy_id: cliDeployId ?? null,
         sandbox_dir: result.sandboxDir,
+        // For platform Tailscale: hostname matches the deploy --hostname flag (= deployment name)
+        ...(platformTailscale ? { tailscale_hostname: name } : {}),
       }).eq('id', deployment.id);
     }
 
@@ -961,6 +1005,7 @@ export const startRestoreFromSnapshot = createServerFn({ method: 'POST' })
     }
 
     // Create deployment row BEFORE proxying to sidecar
+    const { isPlatformTailscaleEnabled: checkPlatformTs } = await import('./tailscale-api');
     const { data: deployment, error: insertError } = await supabase
       .from('deployments')
       .insert({
@@ -972,6 +1017,7 @@ export const startRestoreFromSnapshot = createServerFn({ method: 'POST' })
         size,
         primary_model: process.env.PLATFORM_DEFAULT_MODEL || null,
         template_id: matchingTemplate.id,
+        tailscale_managed: checkPlatformTs(),
       })
       .select()
       .single();
