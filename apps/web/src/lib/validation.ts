@@ -63,6 +63,15 @@ export function generateDeploymentName(personaSlug?: string): string {
   return `${adj}-${noun}-${num}`;
 }
 
+export function generateSnapshotName(deploymentName: string): string {
+  const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const base = `${deploymentName}-snap-${date}`;
+  // DO snapshot name limit: 63 chars
+  if (base.length <= 63) return base;
+  const maxNameLen = 63 - `-snap-${date}`.length;
+  return `${deploymentName.slice(0, maxNameLen)}-snap-${date}`;
+}
+
 export function validateDeploymentName(name: string): { valid: boolean; error?: string } {
   if (!name) return { valid: false, error: 'Name is required' };
   if (!DEPLOYMENT_NAME_REGEX.test(name)) {

@@ -9,6 +9,7 @@ export interface MarketplaceTemplate {
   description: string | null;
   category: string | null;
   providers: string[];
+  provider_snapshots: Record<string, string> | null;
   thumbnail_url: string | null;
   deploy_count: number;
   created_at: string;
@@ -86,15 +87,27 @@ export const getMarketplaceTemplateBySlug = createServerFn({ method: 'GET' })
     const supabase = getAnonymousClient();
     const { slug } = ctx.data;
 
+    // Query agent_templates directly (not the view) to include provider_snapshots for deployment
     const { data, error } = await supabase
-      .from('marketplace_templates')
+      .from('agent_templates')
       .select(
-        'id, name, slug, description, category, providers, thumbnail_url, deploy_count, created_at',
+        'id, name, slug, description, category, provider_snapshots, thumbnail_url, deploy_count, created_at',
       )
       .eq('slug', slug)
+      .eq('is_active', true)
+      .eq('is_published', true)
       .maybeSingle();
 
     if (error) throw new Error(error.message);
+    if (!data) return null;
 
-    return (data as MarketplaceTemplate) ?? null;
+    // Derive providers array from provider_snapshots keys
+    const providerSnapshots = data.provider_snapshots as Record<string, string> | null;
+    const providers = providerSnapshots ? Object.keys(providerSnapshots) : [];
+
+    return {
+      ...data,
+      providers,
+      provider_snapshots: providerSnapshots,
+    } as MarketplaceTemplate;
   });

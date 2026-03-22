@@ -1,9 +1,12 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { getDeploymentDetail, pollDeploymentStatus, destroyDeployment, toggleFunnel, isTailscaleAvailable, TERMINAL_STATUSES } from '../../../lib/server/deployments';
+import { getDeploymentDetail, pollDeploymentStatus, destroyDeployment, toggleFunnel, isTailscaleAvailable, getOperationSteps, TERMINAL_STATUSES } from '../../../lib/server/deployments';
 import { StatusBadge } from '../../../components/status-badge';
+import { OperationProgressBar } from '../../../components/operation-progress-bar';
 import { Progress } from '@workspace/ui/components/progress';
 import { Button } from '@workspace/ui/components/button';
+import { Input } from '@workspace/ui/components/input';
+import { Label } from '@workspace/ui/components/label';
 import {
   Dialog,
   DialogContent,
@@ -12,7 +15,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@workspace/ui/components/dialog';
-import { MODEL_LABELS } from '../../../lib/validation';
+import { MODEL_LABELS, generateSnapshotName } from '../../../lib/validation';
+import { useSnapshotMutation } from '../../../hooks/useSnapshotMutation';
+import { useOperationSSE } from '../../../hooks/useOperationSSE';
 import type { Deployment } from '../../../lib/server/deployments';
 
 export const Route = createFileRoute('/_authenticated/deployments/$deploymentId')({
@@ -31,8 +36,26 @@ function DeploymentDetailPage() {
   const [tailscaleAvailable, setTailscaleAvailable] = useState<boolean | null>(null);
   const [funnelRevealing, setFunnelRevealing] = useState(false);
   const [revealProgress, setRevealProgress] = useState(0);
+  const [snapshotName, setSnapshotName] = useState('');
+  const [operationStartedAt, setOperationStartedAt] = useState<number | null>(null);
+  const [lastOpSteps, setLastOpSteps] = useState<Array<{ label: string; status: string; started_at: string }>>([]);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isMounted = useRef(true);
+
+  // Snapshot mutation hook
+  const { mutate: startSnapshot, isPending: snapshotPending, mutationError: snapshotError, progress: snapshotProgress, reset: resetSnapshot } = useSnapshotMutation(deploymentId);
+
+  // Reconnect SSE if active_operation_id exists on load
+  const activeOpSSE = useOperationSSE(
+    deployment?.active_operation_id && snapshotProgress.status === 'idle'
+      ? deployment.active_operation_id
+      : null,
+    'snapshot'
+  );
+
+  // Use whichever progress is active
+  const activeProgress = snapshotProgress.status !== 'idle' ? snapshotProgress : activeOpSSE;
+  const hasActiveOperation = activeProgress.status === 'running' || activeProgress.status === 'pending';
 
   // Check if platform has Tailscale configured
   useEffect(() => {
@@ -48,6 +71,10 @@ function DeploymentDetailPage() {
       const dep = await getDeploymentDetail({ data: { deploymentId } });
       if (!isMounted.current) return null;
       setDeployment(dep);
+      // Pre-fill snapshot name
+      if (dep.name && !snapshotName) {
+        setSnapshotName(generateSnapshotName(dep.name));
+      }
       return dep;
     } catch (err) {
       if (!isMounted.current) return null;
@@ -56,7 +83,7 @@ function DeploymentDetailPage() {
     } finally {
       if (isMounted.current) setLoading(false);
     }
-  }, [deploymentId]);
+  }, [deploymentId, snapshotName]);
 
   const poll = useCallback(async () => {
     try {
@@ -99,8 +126,42 @@ function DeploymentDetailPage() {
     };
   }, [loadDeployment, poll]);
 
+  // Load last operation steps
+  useEffect(() => {
+    if (!deployment?.last_operation_id) return;
+    getOperationSteps({ data: { deploymentId } })
+      .then((steps) => {
+        if (isMounted.current && Array.isArray(steps)) {
+          setLastOpSteps(steps.slice(-3));
+        }
+      })
+      .catch(() => { /* non-fatal */ });
+  }, [deployment?.last_operation_id, deploymentId]);
+
+  // Track when snapshot operation starts
+  useEffect(() => {
+    if (activeProgress.status === 'running' && !operationStartedAt) {
+      setOperationStartedAt(Date.now());
+    }
+    if (activeProgress.status === 'idle' || activeProgress.status === 'completed' || activeProgress.status === 'error') {
+      setOperationStartedAt(null);
+    }
+  }, [activeProgress.status, operationStartedAt]);
+
+  // Reload deployment when operation completes to clear active_operation_id
+  useEffect(() => {
+    if (activeProgress.status === 'completed' || activeProgress.status === 'error') {
+      loadDeployment();
+    }
+  }, [activeProgress.status, loadDeployment]);
+
+  const handleSnapshot = () => {
+    if (!snapshotName.trim()) return;
+    setOperationStartedAt(Date.now());
+    startSnapshot({ snapshot_name: snapshotName.trim() });
+  };
+
   const handleDestroy = async () => {
-    // Clear polling immediately to prevent stale polls during destroy
     if (pollingRef.current) {
       clearInterval(pollingRef.current);
       pollingRef.current = null;
@@ -110,7 +171,6 @@ function DeploymentDetailPage() {
       await destroyDeployment({ data: { deploymentId } });
       if (!isMounted.current) return;
       setShowDestroyConfirm(false);
-      // Reload to show destroyed status
       await loadDeployment();
     } catch (err) {
       if (!isMounted.current) return;
@@ -128,7 +188,6 @@ function DeploymentDetailPage() {
       if (!isMounted.current) return;
 
       if (action === 'on' && result.funnelUrl) {
-        // Show progress animation before revealing the URL
         setFunnelRevealing(true);
         setRevealProgress(0);
         const start = Date.now();
@@ -191,12 +250,12 @@ function DeploymentDetailPage() {
 
   const isActive = !TERMINAL_STATUSES.has(deployment.status);
   const canDestroy = !['destroyed', 'destroying'].includes(deployment.status);
-
-  // Funnel card visibility: always show when running
   const showFunnelCard = deployment.status === 'running';
+  const showSnapshotCard = deployment.status === 'running' && deployment.provider === 'digitalocean';
 
   return (
     <div className="p-6 space-y-6 max-w-2xl">
+      {/* 1. HEADER */}
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <h1 className="text-2xl font-semibold font-mono break-words">{deployment.name}</h1>
@@ -218,7 +277,32 @@ function DeploymentDetailPage() {
         )}
       </div>
 
-      {isActive && (
+      {/* 2. ACTIVE OPERATION — SSE progress for snapshot/restore */}
+      {hasActiveOperation && (
+        <OperationProgressBar
+          progress={activeProgress}
+          startedAt={operationStartedAt}
+          onClose={() => {
+            resetSnapshot();
+            setOperationStartedAt(null);
+          }}
+        />
+      )}
+
+      {/* Show completed/error progress bar until dismissed */}
+      {!hasActiveOperation && (activeProgress.status === 'completed' || activeProgress.status === 'error') && (
+        <OperationProgressBar
+          progress={activeProgress}
+          startedAt={null}
+          onClose={() => {
+            resetSnapshot();
+            setOperationStartedAt(null);
+          }}
+        />
+      )}
+
+      {/* Deploy progress (existing polling-based) — only when no SSE operation active */}
+      {isActive && !hasActiveOperation && activeProgress.status === 'idle' && (
         <div className="space-y-2">
           <div className="flex justify-between text-sm">
             <span className="text-muted-foreground">{deployment.step_label ?? 'Provisioning...'}</span>
@@ -228,6 +312,7 @@ function DeploymentDetailPage() {
         </div>
       )}
 
+      {/* 3. INSTANCE INFO */}
       <div className="grid grid-cols-2 gap-4 text-sm">
         <div>
           <p className="text-muted-foreground">Region</p>
@@ -251,6 +336,128 @@ function DeploymentDetailPage() {
         )}
       </div>
 
+      {/* 4. ACTIONS — side-by-side on desktop */}
+      {(showSnapshotCard || showFunnelCard) && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Snapshot Card */}
+          {showSnapshotCard && !hasActiveOperation && (
+            <div className="rounded-lg border p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground text-base" aria-hidden="true">&#128247;</span>
+                <p className="text-sm font-medium">Create Snapshot</p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="snapshot-name" className="text-xs text-muted-foreground">
+                  Snapshot name
+                </Label>
+                <Input
+                  id="snapshot-name"
+                  value={snapshotName}
+                  onChange={(e) => setSnapshotName(e.target.value)}
+                  placeholder="my-agent-snap-20260322"
+                  className="text-sm"
+                />
+              </div>
+              {snapshotError && (
+                <p className="text-xs text-red-600">{snapshotError}</p>
+              )}
+              <Button
+                size="sm"
+                onClick={handleSnapshot}
+                disabled={snapshotPending || !snapshotName.trim()}
+              >
+                {snapshotPending ? 'Starting...' : 'Create Snapshot'}
+              </Button>
+            </div>
+          )}
+
+          {/* Funnel Card */}
+          {showFunnelCard && (
+            <div className="rounded-lg border p-4 space-y-3">
+              <p className="text-sm font-medium">Tailscale Funnel</p>
+              {funnelRevealing ? (
+                <div className="space-y-2">
+                  <p className="text-xs text-muted-foreground">Setting up public access...</p>
+                  <Progress value={revealProgress} />
+                  <p className="text-xs text-muted-foreground text-right">{revealProgress}%</p>
+                </div>
+              ) : deployment.funnel_url ? (
+                <div className="space-y-3">
+                  <div>
+                    <p className="text-xs text-muted-foreground">Public URL</p>
+                    <a
+                      href={deployment.funnel_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm font-mono text-blue-600 hover:underline break-all"
+                    >
+                      {deployment.funnel_url}
+                    </a>
+                  </div>
+                  {funnelError && (
+                    <p className="text-xs text-red-600">{funnelError}</p>
+                  )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleFunnelToggle('off')}
+                    disabled={funnelToggling}
+                  >
+                    {funnelToggling ? 'Turning off...' : 'Turn Off Funnel'}
+                  </Button>
+                </div>
+              ) : tailscaleAvailable === false ? (
+                <div className="space-y-2">
+                  <p className="text-xs text-muted-foreground">
+                    Add your Tailscale auth key in{' '}
+                    <a href="/settings" className="text-blue-600 hover:underline">Settings</a>{' '}
+                    to enable public HTTPS access via Tailscale Funnel.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-xs text-muted-foreground">
+                    Enable Tailscale Funnel for public HTTPS access to this agent.
+                  </p>
+                  {funnelError && (
+                    <p className="text-xs text-red-600">{funnelError}</p>
+                  )}
+                  <Button
+                    size="sm"
+                    onClick={() => handleFunnelToggle('on')}
+                    disabled={funnelToggling}
+                  >
+                    {funnelToggling ? 'Enabling...' : 'Enable Funnel'}
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 5. LAST OPERATION */}
+      {lastOpSteps.length > 0 && (
+        <div className="rounded-lg border p-4 space-y-2">
+          <p className="text-sm font-medium">Last Operation</p>
+          <div className="space-y-1">
+            {lastOpSteps.map((step, i) => (
+              <div key={i} className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">{step.label}</span>
+                <span className={
+                  step.status === 'completed' ? 'text-green-600' :
+                  step.status === 'failed' ? 'text-red-600' :
+                  'text-muted-foreground'
+                }>
+                  {step.status}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 6. PERSONA */}
       {deployment.persona_name && (
         <div className="rounded-lg border p-4 space-y-1">
           <p className="text-sm font-medium">Persona: {deployment.persona_name}</p>
@@ -266,68 +473,7 @@ function DeploymentDetailPage() {
         </div>
       )}
 
-      {showFunnelCard && (
-        <div className="rounded-lg border p-4 space-y-3">
-          <p className="text-sm font-medium">Tailscale Funnel</p>
-          {funnelRevealing ? (
-            <div className="space-y-2">
-              <p className="text-xs text-muted-foreground">Setting up public access...</p>
-              <Progress value={revealProgress} />
-              <p className="text-xs text-muted-foreground text-right">{revealProgress}%</p>
-            </div>
-          ) : deployment.funnel_url ? (
-            <div className="space-y-3">
-              <div>
-                <p className="text-xs text-muted-foreground">Public URL</p>
-                <a
-                  href={deployment.funnel_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-sm font-mono text-blue-600 hover:underline break-all"
-                >
-                  {deployment.funnel_url}
-                </a>
-              </div>
-              {funnelError && (
-                <p className="text-xs text-red-600">{funnelError}</p>
-              )}
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => handleFunnelToggle('off')}
-                disabled={funnelToggling}
-              >
-                {funnelToggling ? 'Turning off...' : 'Turn Off Funnel'}
-              </Button>
-            </div>
-          ) : tailscaleAvailable === false ? (
-            <div className="space-y-2">
-              <p className="text-xs text-muted-foreground">
-                Add your Tailscale auth key in{' '}
-                <a href="/settings" className="text-blue-600 hover:underline">Settings</a>{' '}
-                to enable public HTTPS access via Tailscale Funnel.
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              <p className="text-xs text-muted-foreground">
-                Enable Tailscale Funnel for public HTTPS access to this agent.
-              </p>
-              {funnelError && (
-                <p className="text-xs text-red-600">{funnelError}</p>
-              )}
-              <Button
-                size="sm"
-                onClick={() => handleFunnelToggle('on')}
-                disabled={funnelToggling}
-              >
-                {funnelToggling ? 'Enabling...' : 'Enable Funnel'}
-              </Button>
-            </div>
-          )}
-        </div>
-      )}
-
+      {/* 7. ERROR */}
       {deployment.error_message && (
         <div className="rounded-md bg-red-50 border border-red-200 p-3 text-sm text-red-700">
           {deployment.error_message}
