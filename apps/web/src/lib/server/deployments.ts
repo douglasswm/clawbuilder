@@ -444,6 +444,9 @@ export const pollDeploymentStatus = createServerFn({ method: 'POST' })
             if (funnelResult.funnelUrl) updates.funnel_url = funnelResult.funnelUrl;
             if (funnelResult.gatewayToken) updates.gateway_token = funnelResult.gatewayToken;
             if (funnelResult.deviceId) updates.tailscale_device_id = funnelResult.deviceId;
+          } else {
+            // No IP available yet — roll back claim so next poll can retry
+            updates.tailscale_setup_status = 'pending';
           }
         } catch (err) {
           console.error('[pollDeploymentStatus] Auto-funnel failed:', err);

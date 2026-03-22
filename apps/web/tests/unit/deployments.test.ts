@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { setCliExecutor, parseNdjson } from '../../src/lib/server/clawmacdo';
-import { normalizeStatus, buildCliBaseEnv, checkTailscaleAvailable } from '../../src/lib/server/deployments';
+import { normalizeStatus, buildCliBaseEnv } from '../../src/lib/server/deployments';
 import {
   validateDeploymentName,
   validateRegion,
@@ -157,23 +157,15 @@ describe('buildCliBaseEnv', () => {
     expect(result).toEqual({ DO_TOKEN: 'dop_v1_test123', BYTEPLUS_ARKMODEL_API_KEY: 'bp-test-key-123' });
   });
 
-  it('returns TAILSCALE_AUTH_KEY when env var is set', () => {
+  it('excludes TAILSCALE_AUTH_KEY even when env var is set (per-user only)', () => {
     process.env = { ...originalEnv, TAILSCALE_AUTH_KEY: 'tskey-auth-test123' };
-    delete process.env.DO_TOKEN;
-    delete process.env.BYTEPLUS_ARKMODEL_API_KEY;
-    const result = buildCliBaseEnv();
-    expect(result).toEqual({ TAILSCALE_AUTH_KEY: 'tskey-auth-test123' });
-  });
-
-  it('omits TAILSCALE_AUTH_KEY when empty', () => {
-    process.env = { ...originalEnv, TAILSCALE_AUTH_KEY: '' };
     delete process.env.DO_TOKEN;
     delete process.env.BYTEPLUS_ARKMODEL_API_KEY;
     const result = buildCliBaseEnv();
     expect(result).toEqual({});
   });
 
-  it('returns all three env vars together', () => {
+  it('returns both DO_TOKEN and BYTEPLUS without TAILSCALE_AUTH_KEY', () => {
     process.env = {
       ...originalEnv,
       DO_TOKEN: 'dop_v1_test123',
@@ -184,7 +176,6 @@ describe('buildCliBaseEnv', () => {
     expect(result).toEqual({
       DO_TOKEN: 'dop_v1_test123',
       BYTEPLUS_ARKMODEL_API_KEY: 'bp-test-key-123',
-      TAILSCALE_AUTH_KEY: 'tskey-auth-test123',
     });
   });
 });
@@ -294,23 +285,60 @@ describe('parseNdjson handles deploy output', () => {
   });
 });
 
-describe('checkTailscaleAvailable', () => {
+describe('buildCliBaseEnv excludes platform Tailscale token', () => {
   const originalEnv = process.env;
 
   afterEach(() => {
     process.env = originalEnv;
   });
 
-  it('returns available: true when TAILSCALE_AUTH_KEY is set', () => {
-    process.env = { ...originalEnv, TAILSCALE_AUTH_KEY: 'tskey-auth-test123' };
-    const result = checkTailscaleAvailable();
-    expect(result).toEqual({ available: true });
+  it('excludes TAILSCALE_API_TOKEN (platform token is for API calls, not CLI)', () => {
+    process.env = { ...originalEnv, TAILSCALE_API_TOKEN: 'tskey-api-test123', TAILSCALE_TAILNET: 'test.ts.net' };
+    delete process.env.DO_TOKEN;
+    delete process.env.BYTEPLUS_ARKMODEL_API_KEY;
+    const result = buildCliBaseEnv();
+    expect(result).toEqual({});
+    expect(result).not.toHaveProperty('TAILSCALE_API_TOKEN');
+    expect(result).not.toHaveProperty('TAILSCALE_TAILNET');
   });
 
-  it('returns available: false when TAILSCALE_AUTH_KEY is missing', () => {
-    process.env = { ...originalEnv };
-    delete process.env.TAILSCALE_AUTH_KEY;
-    const result = checkTailscaleAvailable();
-    expect(result).toEqual({ available: false });
+  it('excludes both user auth key AND platform token from base env', () => {
+    process.env = {
+      ...originalEnv,
+      DO_TOKEN: 'dop_v1_test',
+      TAILSCALE_AUTH_KEY: 'tskey-auth-user',
+      TAILSCALE_API_TOKEN: 'tskey-api-platform',
+      TAILSCALE_TAILNET: 'test.ts.net',
+    };
+    const result = buildCliBaseEnv();
+    expect(result).toEqual({ DO_TOKEN: 'dop_v1_test' });
+  });
+});
+
+describe('isPlatformTailscaleEnabled integration', () => {
+  const originalEnv = process.env;
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  it('returns true when both platform env vars are set', async () => {
+    process.env = { ...originalEnv, TAILSCALE_API_TOKEN: 'tskey-api-test', TAILSCALE_TAILNET: 'test.ts.net' };
+    const { isPlatformTailscaleEnabled } = await import('../../src/lib/server/tailscale-api');
+    expect(isPlatformTailscaleEnabled()).toBe(true);
+  });
+
+  it('returns false when only token is set (missing tailnet)', async () => {
+    process.env = { ...originalEnv, TAILSCALE_API_TOKEN: 'tskey-api-test' };
+    delete process.env.TAILSCALE_TAILNET;
+    const { isPlatformTailscaleEnabled } = await import('../../src/lib/server/tailscale-api');
+    expect(isPlatformTailscaleEnabled()).toBe(false);
+  });
+
+  it('returns false when neither is set (user-managed mode)', async () => {
+    delete process.env.TAILSCALE_API_TOKEN;
+    delete process.env.TAILSCALE_TAILNET;
+    const { isPlatformTailscaleEnabled } = await import('../../src/lib/server/tailscale-api');
+    expect(isPlatformTailscaleEnabled()).toBe(false);
   });
 });
