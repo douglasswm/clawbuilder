@@ -18,6 +18,7 @@ import {
 } from "@workspace/ui/components/dropdown-menu"
 import { Separator } from "@workspace/ui/components/separator"
 import {
+  ClockCounterClockwise,
   Gear,
   House,
   Plus,
@@ -98,10 +99,18 @@ function AuthenticatedLayout() {
           </div>
           <Link
             to="/deploy"
+            search={{ template: undefined, provider: undefined }}
             className="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
           >
             <Plus className="h-4 w-4" />
             Create an agent
+          </Link>
+          <Link
+            to="/restore"
+            className="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+          >
+            <ClockCounterClockwise className="h-4 w-4" />
+            Restore
           </Link>
         </nav>
 

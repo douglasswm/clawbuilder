@@ -16,6 +16,7 @@ import { Route as MarketplaceIndexRouteImport } from './routes/marketplace/index
 import { Route as MarketplaceSlugRouteImport } from './routes/marketplace/$slug'
 import { Route as AuthCallbackRouteImport } from './routes/auth/callback'
 import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
+import { Route as AuthenticatedRestoreRouteImport } from './routes/_authenticated/restore'
 import { Route as AuthenticatedDeployRouteImport } from './routes/_authenticated/deploy'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
 import { Route as AuthenticatedDeployIndexRouteImport } from './routes/_authenticated/deploy/index'
@@ -55,6 +56,11 @@ const AuthenticatedSettingsRoute = AuthenticatedSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const AuthenticatedRestoreRoute = AuthenticatedRestoreRouteImport.update({
+  id: '/restore',
+  path: '/restore',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
 const AuthenticatedDeployRoute = AuthenticatedDeployRouteImport.update({
   id: '/deploy',
   path: '/deploy',
@@ -83,6 +89,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/deploy': typeof AuthenticatedDeployRouteWithChildren
+  '/restore': typeof AuthenticatedRestoreRoute
   '/settings': typeof AuthenticatedSettingsRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/marketplace/$slug': typeof MarketplaceSlugRoute
@@ -94,6 +101,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
+  '/restore': typeof AuthenticatedRestoreRoute
   '/settings': typeof AuthenticatedSettingsRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/marketplace/$slug': typeof MarketplaceSlugRoute
@@ -108,6 +116,7 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
   '/_authenticated/deploy': typeof AuthenticatedDeployRouteWithChildren
+  '/_authenticated/restore': typeof AuthenticatedRestoreRoute
   '/_authenticated/settings': typeof AuthenticatedSettingsRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/marketplace/$slug': typeof MarketplaceSlugRoute
@@ -122,6 +131,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/dashboard'
     | '/deploy'
+    | '/restore'
     | '/settings'
     | '/auth/callback'
     | '/marketplace/$slug'
@@ -133,6 +143,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/dashboard'
+    | '/restore'
     | '/settings'
     | '/auth/callback'
     | '/marketplace/$slug'
@@ -146,6 +157,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/_authenticated/dashboard'
     | '/_authenticated/deploy'
+    | '/_authenticated/restore'
     | '/_authenticated/settings'
     | '/auth/callback'
     | '/marketplace/$slug'
@@ -214,6 +226,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedSettingsRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/restore': {
+      id: '/_authenticated/restore'
+      path: '/restore'
+      fullPath: '/restore'
+      preLoaderRoute: typeof AuthenticatedRestoreRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/deploy': {
       id: '/_authenticated/deploy'
       path: '/deploy'
@@ -259,6 +278,7 @@ const AuthenticatedDeployRouteWithChildren =
 interface AuthenticatedRouteChildren {
   AuthenticatedDashboardRoute: typeof AuthenticatedDashboardRoute
   AuthenticatedDeployRoute: typeof AuthenticatedDeployRouteWithChildren
+  AuthenticatedRestoreRoute: typeof AuthenticatedRestoreRoute
   AuthenticatedSettingsRoute: typeof AuthenticatedSettingsRoute
   AuthenticatedDeploymentsDeploymentIdRoute: typeof AuthenticatedDeploymentsDeploymentIdRoute
 }
@@ -266,6 +286,7 @@ interface AuthenticatedRouteChildren {
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedDashboardRoute: AuthenticatedDashboardRoute,
   AuthenticatedDeployRoute: AuthenticatedDeployRouteWithChildren,
+  AuthenticatedRestoreRoute: AuthenticatedRestoreRoute,
   AuthenticatedSettingsRoute: AuthenticatedSettingsRoute,
   AuthenticatedDeploymentsDeploymentIdRoute:
     AuthenticatedDeploymentsDeploymentIdRoute,
