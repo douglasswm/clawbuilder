@@ -60,7 +60,8 @@ function DeploymentDetailPage() {
   // Check if platform has Tailscale configured
   useEffect(() => {
     isTailscaleAvailable().then((res) => {
-      if (isMounted.current) setTailscaleAvailable(res.available);
+      // For user-managed deployments, use userKeyAvailable (not platform availability)
+      if (isMounted.current) setTailscaleAvailable(res.userKeyAvailable ?? res.available);
     }).catch(() => {
       if (isMounted.current) setTailscaleAvailable(false);
     });
@@ -100,7 +101,10 @@ function DeploymentDetailPage() {
         }
         return next;
       });
-      if (TERMINAL_STATUSES.has(dep.status)) {
+      // Stop polling only when deployment is terminal AND funnel setup is complete (or not applicable)
+      const funnelDone = !dep.tailscale_managed ||
+        (dep.tailscale_setup_status !== 'pending' && dep.tailscale_setup_status !== 'in_progress');
+      if (TERMINAL_STATUSES.has(dep.status) && funnelDone) {
         if (pollingRef.current) {
           clearInterval(pollingRef.current);
           pollingRef.current = null;
@@ -114,7 +118,11 @@ function DeploymentDetailPage() {
   useEffect(() => {
     isMounted.current = true;
     loadDeployment().then((dep) => {
-      if (isMounted.current && dep && !TERMINAL_STATUSES.has(dep.status)) {
+      if (!isMounted.current || !dep) return;
+      // Keep polling if deployment is not terminal, OR if funnel setup is still in progress
+      const needsPoll = !TERMINAL_STATUSES.has(dep.status) ||
+        (dep.tailscale_managed && (dep.tailscale_setup_status === 'pending' || dep.tailscale_setup_status === 'in_progress'));
+      if (needsPoll) {
         pollingRef.current = setInterval(poll, 10_000);
       }
     });
@@ -209,6 +217,7 @@ function DeploymentDetailPage() {
               funnel_url: result.funnelUrl ?? undefined,
               gateway_token: result.gatewayToken ?? undefined,
               tailscale_configured: true,
+              tailscale_setup_status: 'configured',
             } : prev);
           }
         };
@@ -219,6 +228,7 @@ function DeploymentDetailPage() {
           funnel_url: result.funnelUrl ?? undefined,
           gateway_token: result.gatewayToken ?? undefined,
           tailscale_configured: action === 'on' ? true : prev.tailscale_configured,
+          tailscale_setup_status: action === 'on' ? 'configured' : prev.tailscale_setup_status,
         } : prev);
       }
     } catch (err) {
@@ -400,6 +410,27 @@ function DeploymentDetailPage() {
                         {deployment.funnel_url}
                       </a>
                     </div>
+                    {deployment.gateway_token && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Gateway Token</p>
+                        <div className="flex items-center gap-2">
+                          <code className="text-xs font-mono bg-muted px-2 py-1 rounded break-all select-all">
+                            {deployment.gateway_token}
+                          </code>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2 text-xs"
+                            onClick={() => {
+                              navigator.clipboard.writeText(deployment.gateway_token!);
+                            }}
+                          >
+                            Copy
+                          </Button>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1">Paste this into the Gateway Token field on the dashboard</p>
+                      </div>
+                    )}
                     {funnelError && (
                       <p className="text-xs text-red-600">{funnelError}</p>
                     )}
@@ -461,6 +492,27 @@ function DeploymentDetailPage() {
                         {deployment.funnel_url}
                       </a>
                     </div>
+                    {deployment.gateway_token && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Gateway Token</p>
+                        <div className="flex items-center gap-2">
+                          <code className="text-xs font-mono bg-muted px-2 py-1 rounded break-all select-all">
+                            {deployment.gateway_token}
+                          </code>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2 text-xs"
+                            onClick={() => {
+                              navigator.clipboard.writeText(deployment.gateway_token!);
+                            }}
+                          >
+                            Copy
+                          </Button>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1">Paste this into the Gateway Token field on the dashboard</p>
+                      </div>
+                    )}
                     {funnelError && (
                       <p className="text-xs text-red-600">{funnelError}</p>
                     )}

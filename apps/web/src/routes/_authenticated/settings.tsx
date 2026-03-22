@@ -26,6 +26,7 @@ function SettingsPage() {
   const [geminiKey, setGeminiKey] = useState('');
   const [tailscaleKey, setTailscaleKey] = useState('');
   const [saving, setSaving] = useState(false);
+  const [removing, setRemoving] = useState<string | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [tailscaleMode, setTailscaleMode] = useState<'platform' | 'user' | null>(null);
 
@@ -72,6 +73,21 @@ function SettingsPage() {
     }
   };
 
+  const handleRemoveKey = async (keyName: 'anthropicKey' | 'openaiKey' | 'geminiKey' | 'tailscaleKey') => {
+    setRemoving(keyName);
+    setMessage(null);
+    try {
+      await saveUserApiKeys({ data: { [keyName]: '' } });
+      const updated = await getUserApiKeys();
+      setKeys(updated);
+      setMessage({ type: 'success', text: 'Key removed.' });
+    } catch (err) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to remove key.' });
+    } finally {
+      setRemoving(null);
+    }
+  };
+
   return (
     <div className="p-6 max-w-2xl">
       <h1 className="text-2xl font-semibold mb-6">Settings</h1>
@@ -103,7 +119,12 @@ function SettingsPage() {
                 autoComplete="off"
               />
               {keys?.hasAnthropicKey && !anthropicKey && (
-                <p className="text-xs text-muted-foreground">Key saved: {keys.anthropicKeyMasked}</p>
+                <div className="flex items-center gap-2">
+                  <p className="text-xs text-muted-foreground">Key saved: {keys.anthropicKeyMasked}</p>
+                  <Button type="button" variant="ghost" size="sm" className="h-5 px-1 text-xs text-red-600 hover:text-red-700" onClick={() => handleRemoveKey('anthropicKey')} disabled={removing === 'anthropicKey'}>
+                    {removing === 'anthropicKey' ? 'Removing...' : 'Remove'}
+                  </Button>
+                </div>
               )}
             </div>
 
@@ -118,7 +139,12 @@ function SettingsPage() {
                 autoComplete="off"
               />
               {keys?.hasOpenaiKey && !openaiKey && (
-                <p className="text-xs text-muted-foreground">Key saved: {keys.openaiKeyMasked}</p>
+                <div className="flex items-center gap-2">
+                  <p className="text-xs text-muted-foreground">Key saved: {keys.openaiKeyMasked}</p>
+                  <Button type="button" variant="ghost" size="sm" className="h-5 px-1 text-xs text-red-600 hover:text-red-700" onClick={() => handleRemoveKey('openaiKey')} disabled={removing === 'openaiKey'}>
+                    {removing === 'openaiKey' ? 'Removing...' : 'Remove'}
+                  </Button>
+                </div>
               )}
             </div>
 
@@ -133,7 +159,12 @@ function SettingsPage() {
                 autoComplete="off"
               />
               {keys?.hasGeminiKey && !geminiKey && (
-                <p className="text-xs text-muted-foreground">Key saved: {keys.geminiKeyMasked}</p>
+                <div className="flex items-center gap-2">
+                  <p className="text-xs text-muted-foreground">Key saved: {keys.geminiKeyMasked}</p>
+                  <Button type="button" variant="ghost" size="sm" className="h-5 px-1 text-xs text-red-600 hover:text-red-700" onClick={() => handleRemoveKey('geminiKey')} disabled={removing === 'geminiKey'}>
+                    {removing === 'geminiKey' ? 'Removing...' : 'Remove'}
+                  </Button>
+                </div>
               )}
             </div>
 
@@ -166,7 +197,12 @@ function SettingsPage() {
                 autoComplete="off"
               />
               {keys?.hasTailscaleKey && !tailscaleKey && (
-                <p className="text-xs text-muted-foreground">Key saved: {keys.tailscaleKeyMasked}</p>
+                <div className="flex items-center gap-2">
+                  <p className="text-xs text-muted-foreground">Key saved: {keys.tailscaleKeyMasked}</p>
+                  <Button type="button" variant="ghost" size="sm" className="h-5 px-1 text-xs text-red-600 hover:text-red-700" onClick={() => handleRemoveKey('tailscaleKey')} disabled={removing === 'tailscaleKey'}>
+                    {removing === 'tailscaleKey' ? 'Removing...' : 'Remove'}
+                  </Button>
+                </div>
               )}
               {tailscaleMode !== 'platform' && (
                 <p className="text-xs text-muted-foreground">
