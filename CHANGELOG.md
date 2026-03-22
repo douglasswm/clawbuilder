@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.5.1] - 2026-03-23
+
+### Fixed
+- `clearActiveOperation` now uses compare-and-swap to prevent stale tabs from clearing a newer operation's lock
+- Tailscale hostname includes deployment UUID prefix to prevent cross-tenant device collisions
+- `executeFunnelSetup` throws if CLI exits 0 but no funnel URL is parsed (prevents zombie configured state)
+- Platform-managed funnel re-enable now injects fresh auth key (prevents failure after device session loss)
+- Tailscale API calls have 30-second timeout via `AbortSignal.timeout()` (prevents indefinite hangs)
+- Migration backfill guarded with `AND tailscale_managed = true` to avoid misleading status on user-managed rows
+- Poll dedupe now compares `tailscale_setup_status` and `funnel_url` (fixes stale UI after auto-funnel completes)
+- User-managed fresh deploys now pass `--tailscale` flags to CLI when user has a stored auth key
+- `.env.example` updated: removed stale `TAILSCALE_AUTH_KEY`, added `PLATFORM_DEFAULT_MODEL` and `BYTEPLUS_ARKMODEL_API_KEY`
+- `deleteDevice` no longer sends `Content-Type: application/json` on bodyless DELETE request
+- Tailnet and device ID values URI-encoded in Tailscale API URL paths
+
 ## [0.2.5.0] - 2026-03-23
 
 ### Added
@@ -18,6 +33,16 @@ All notable changes to this project will be documented in this file.
 - Database migration: `tailscale_device_id`, `tailscale_hostname`, `tailscale_managed`, `tailscale_setup_status` columns on deployments table
 - 18 new unit tests (13 for tailscale-api module, 5 for platform mode integration)
 - 3 new TODOs: HOME directory unification, API token rotation automation, orphan device cleanup
+
+### Next Steps (manual)
+- Create a platform Tailscale account at https://login.tailscale.com/start (Free plan is sufficient)
+- Generate an API access token (Settings → Keys, all scopes, 90-day expiry)
+- Enable MagicDNS and HTTPS Certificates in Tailscale DNS settings
+- Deploy ACL policy from `docs/tailscale-migration.md` Section 3 into Access Controls tab
+- Test ACL isolation: deploy 2 dummy `tag:tenant` nodes, verify they can't reach each other
+- Set env vars: `TAILSCALE_API_TOKEN` and `TAILSCALE_TAILNET`
+- Set a 90-day calendar reminder for API token rotation
+- Run database migration: `20260323002000_platform_tailscale.sql`
 
 ### Fixed
 - Auto-funnel rolls back to `pending` when IP address is not yet available (prevents stuck `in_progress` state)
