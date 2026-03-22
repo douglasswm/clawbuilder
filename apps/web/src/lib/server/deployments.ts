@@ -50,6 +50,9 @@ export interface Deployment {
   step_label?: string;
   error_message?: string;
   sandbox_dir?: string;
+  active_operation_id?: string;
+  last_operation_id?: string;
+  template_id?: string;
   created_at: string;
   updated_at: string;
 }
@@ -346,6 +349,13 @@ export const pollDeploymentStatus = createServerFn({ method: 'POST' })
 
     if (trackResult.code !== 0) {
       console.warn(`[pollDeploymentStatus] track exited ${trackResult.code}: ${trackResult.stderr}`);
+      // If track exits non-zero with no stdout, treat as a failure
+      if (!trackResult.stdout.trim()) {
+        const failMsg = trackResult.stderr?.trim() || `Track command failed (exit code ${trackResult.code})`;
+        const updates = { status: 'failed' as const, error_message: failMsg };
+        await supabase.from('deployments').update(updates).eq('id', dep.id);
+        return { ...dep, ...updates };
+      }
     }
 
     const events = parseNdjson(trackResult.stdout);
@@ -686,3 +696,246 @@ export const isTailscaleAvailable = createServerFn({ method: 'GET' }).handler(as
     return { available: false };
   }
 });
+
+/** Resolve a DigitalOcean droplet by hostname/name — returns both ID and IP. */
+async function resolveDroplet(name: string): Promise<{ id: number; ip: string } | null> {
+  const doToken = process.env.DO_TOKEN;
+  if (!doToken) return null;
+
+  const listRes = await fetch(
+    `https://api.digitalocean.com/v2/droplets?per_page=200`,
+    { headers: { Authorization: `Bearer ${doToken}` } }
+  );
+  if (!listRes.ok) return null;
+  const { droplets } = (await listRes.json()) as {
+    droplets: Array<{ id: number; name: string; networks: { v4: Array<{ ip_address: string; type: string }> } }>;
+  };
+
+  const match = droplets.find((d) => d.name === name || d.name === `openclaw-${name}`);
+  if (!match) return null;
+
+  const publicNet = match.networks.v4.find((n) => n.type === 'public');
+  return publicNet ? { id: match.id, ip: publicNet.ip_address } : null;
+}
+
+/** Create a snapshot of a running deployment via clawmacdo serve sidecar. */
+export const createSnapshot = createServerFn({ method: 'POST' })
+  .inputValidator((data: { deploymentId: string; snapshotName: string }) => data)
+  .handler(async (ctx) => {
+    const { supabase, user } = await getAuthenticatedClient();
+    const { deploymentId, snapshotName } = ctx.data;
+
+    // Fetch deployment and verify ownership + status
+    const { data: deployment, error: fetchError } = await supabase
+      .from('deployments')
+      .select('*')
+      .eq('id', deploymentId)
+      .eq('user_id', user.id)
+      .maybeSingle();
+
+    if (fetchError) throw new Error(fetchError.message);
+    if (!deployment) throw new Response('Not found', { status: 404 });
+
+    const dep = deployment as Deployment;
+    if (dep.status !== 'running') {
+      throw new Error('Snapshots can only be created from running deployments.');
+    }
+
+    // Atomic guard: only proceed if no operation is already active
+    // Prevents race condition from concurrent snapshot requests
+    const { count: claimed } = await supabase
+      .from('deployments')
+      .update({ active_operation_id: 'claiming' }, { count: 'exact' })
+      .eq('id', dep.id)
+      .is('active_operation_id', null);
+
+    if (!claimed || claimed === 0) {
+      throw new Error('An operation is already in progress for this deployment.');
+    }
+
+    // Resolve droplet ID via DO API
+    const droplet = await resolveDroplet(dep.droplet_hostname ?? dep.name);
+    if (!droplet) {
+      // Release the claim
+      await supabase.from('deployments').update({ active_operation_id: null }).eq('id', dep.id);
+      throw new Error('Could not find droplet on DigitalOcean. Ensure the instance is running.');
+    }
+
+    // Start sidecar and proxy the snapshot request
+    const { proxySidecar } = await import('./clawmacdo-serve');
+    let result: { ok: boolean; message: string; operation_id?: string };
+    try {
+      const sidecarRes = await proxySidecar(`/api/deployments/${dep.cli_deploy_id || dep.id}/snapshot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          snapshot_name: snapshotName,
+          do_token: process.env.DO_TOKEN,
+          droplet_id: droplet.id,
+        }),
+      });
+      result = (await sidecarRes.json()) as { ok: boolean; message: string; operation_id?: string };
+    } catch (err) {
+      // Release the claim on sidecar failure
+      await supabase.from('deployments').update({ active_operation_id: null }).eq('id', dep.id);
+      throw new Error(`Sidecar error: ${String(err)}`);
+    }
+
+    if (result.ok && result.operation_id) {
+      // Store real operation ID, replacing the 'claiming' placeholder
+      await supabase.from('deployments').update({
+        active_operation_id: result.operation_id,
+        last_operation_id: result.operation_id,
+      }).eq('id', dep.id);
+    } else {
+      // Sidecar returned failure — release the claim
+      await supabase.from('deployments').update({ active_operation_id: null }).eq('id', dep.id);
+    }
+
+    return result;
+  });
+
+/** Start a restore-from-snapshot operation via clawmacdo serve sidecar. */
+export const startRestoreFromSnapshot = createServerFn({ method: 'POST' })
+  .inputValidator((data: { snapshotName: string; region: string; size: string; name: string }) => data)
+  .handler(async (ctx) => {
+    const { supabase, user } = await getAuthenticatedClient();
+    const { snapshotName, region, size, name } = ctx.data;
+
+    // Validate inputs
+    const nameValidation = validateDeploymentName(name);
+    if (!nameValidation.valid) throw new Error(nameValidation.error);
+    if (!validateRegion(region)) throw new Error(`Invalid region: ${region}`);
+    if (!validateSize(size)) throw new Error(`Invalid size: ${size}`);
+
+    // Validate snapshot name against agent_templates using provider_snapshots JSONB
+    const { data: templates } = await supabase
+      .from('agent_templates')
+      .select('id, name, provider_snapshots')
+      .eq('is_active', true);
+
+    // Validate specifically against the digitalocean provider (not any provider)
+    const matchingTemplate = (templates ?? []).find((t: { provider_snapshots: Record<string, string> | null }) =>
+      t.provider_snapshots && t.provider_snapshots['digitalocean'] === snapshotName
+    );
+    if (!matchingTemplate) {
+      throw new Error(`Invalid snapshot: "${snapshotName}" is not an approved agent template.`);
+    }
+
+    if (!process.env.DO_TOKEN) {
+      throw new Error('DigitalOcean token is not configured. Contact your administrator.');
+    }
+
+    // Create deployment row BEFORE proxying to sidecar
+    const { data: deployment, error: insertError } = await supabase
+      .from('deployments')
+      .insert({
+        user_id: user.id,
+        name,
+        status: 'provisioning',
+        provider: 'digitalocean',
+        region,
+        size,
+        primary_model: process.env.PLATFORM_DEFAULT_MODEL || null,
+        template_id: matchingTemplate.id,
+      })
+      .select()
+      .single();
+
+    if (insertError) {
+      if (insertError.code === '23505') {
+        throw new Error(`A deployment named "${name}" already exists.`);
+      }
+      throw new Error(insertError.message);
+    }
+
+    // Start sidecar and proxy the restore request
+    const { proxySidecar } = await import('./clawmacdo-serve');
+    let result: { ok: boolean; message: string; operation_id?: string };
+    try {
+      const sidecarRes = await proxySidecar('/api/snapshots/restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider: 'digitalocean',
+          snapshot_name: snapshotName,
+          do_token: process.env.DO_TOKEN,
+          region,
+          size,
+        }),
+      });
+      result = (await sidecarRes.json()) as { ok: boolean; message: string; operation_id?: string };
+    } catch (err) {
+      // Sidecar failed — mark deployment as failed
+      await supabase.from('deployments').update({
+        status: 'failed',
+        error_message: String(err),
+      }).eq('id', deployment.id);
+      throw new Error(`Sidecar error: ${String(err)}`);
+    }
+
+    if (result.ok && result.operation_id) {
+      await supabase.from('deployments').update({
+        active_operation_id: result.operation_id,
+        last_operation_id: result.operation_id,
+        cli_deploy_id: result.operation_id,
+      }).eq('id', deployment.id);
+    } else {
+      await supabase.from('deployments').update({
+        status: 'failed',
+        error_message: result.message || 'Restore failed to start',
+      }).eq('id', deployment.id);
+    }
+
+    return { ...result, deploymentId: deployment.id };
+  });
+
+/** Get operation steps for the last operation on a deployment (for history card). */
+export const getOperationSteps = createServerFn({ method: 'GET' })
+  .inputValidator((data: { deploymentId: string }) => data)
+  .handler(async (ctx) => {
+    const { supabase, user } = await getAuthenticatedClient();
+
+    const { data: deployment } = await supabase
+      .from('deployments')
+      .select('last_operation_id')
+      .eq('id', ctx.data.deploymentId)
+      .eq('user_id', user.id)
+      .maybeSingle();
+
+    if (!deployment?.last_operation_id) return [];
+
+    // Proxy to sidecar to get steps
+    const { proxySidecar } = await import('./clawmacdo-serve');
+    try {
+      const sidecarRes = await proxySidecar(
+        `/api/deploy/steps/${deployment.last_operation_id}`
+      );
+      if (!sidecarRes.ok) return [];
+      return await sidecarRes.json();
+    } catch {
+      return [];
+    }
+  });
+
+/** Update a deployment after a restore operation completes (called from client after SSE terminal message). */
+export const updateDeploymentAfterRestore = createServerFn({ method: 'POST' })
+  .inputValidator((data: { deploymentId: string; hostname?: string; ip?: string; deployId?: string }) => data)
+  .handler(async (ctx) => {
+    const { supabase, user } = await getAuthenticatedClient();
+    const { deploymentId, hostname, ip, deployId } = ctx.data;
+
+    const updates: Record<string, unknown> = {
+      status: 'running',
+      active_operation_id: null,
+    };
+    if (hostname) updates.droplet_hostname = hostname;
+    if (ip) updates.ip_address = ip;
+    if (deployId) updates.cli_deploy_id = deployId;
+
+    await supabase.from('deployments').update(updates)
+      .eq('id', deploymentId)
+      .eq('user_id', user.id);
+
+    return { success: true };
+  });
