@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.5.0] - 2026-03-23
+
+### Added
+- **Platform-managed Tailscale** — platform auto-generates single-use auth keys via Tailscale REST API so users get a live HTTPS Funnel URL without any Tailscale awareness
+- `tailscale-api.ts` module: `isPlatformTailscaleEnabled()`, `createTenantAuthKey()`, `deleteDevice()`, `findDeviceByHostname()` wrapping `api.tailscale.com/api/v2`
+- Tailscale setup state machine (`tailscale_setup_status`: pending → in_progress → configured | failed) replacing overloaded `tailscale_configured` boolean for platform-managed deployments
+- Auto-funnel triggers in `pollDeploymentStatus()`, `updateDeploymentAfterRestore()`, and sync restore path — all use atomic claim pattern to prevent duplicate setups
+- `executeFunnelSetup()` shared helper extracted from `toggleFunnel()` — DRY across manual toggle, auto-funnel in poll, and auto-funnel in restore
+- Tailscale device cleanup in `destroyDeployment()` via `deleteDevice()` API call
+- Dual-mode `isTailscaleAvailable()` returns `{ available, mode }` for frontend conditional rendering
+- Dual-mode `toggleFunnel()` uses platform key (via `createTenantAuthKey()`) or user key based on `tailscale_managed` flag, with retry from `failed` state
+- Settings page: platform mode info message + legacy key input for user-managed deployments
+- Deployment detail page: state machine Funnel card UI (pending spinner, in_progress progress bar, configured URL display, failed retry button)
+- Database migration: `tailscale_device_id`, `tailscale_hostname`, `tailscale_managed`, `tailscale_setup_status` columns on deployments table
+- 18 new unit tests (13 for tailscale-api module, 5 for platform mode integration)
+- 3 new TODOs: HOME directory unification, API token rotation automation, orphan device cleanup
+
+### Fixed
+- Auto-funnel rolls back to `pending` when IP address is not yet available (prevents stuck `in_progress` state)
+- `createTenantAuthKey()` failure during deploy now marks deployment as `failed` instead of leaving it in `pending`
+- `startRestoreFromSnapshot()` now sets `tailscale_managed` flag so Restore page deployments participate in platform mode
+- Fresh deploy path stores `tailscale_hostname` from `--hostname` flag so device discovery works for destroy cleanup
+
 ## [0.2.4.0] - 2026-03-22
 
 ### Added
