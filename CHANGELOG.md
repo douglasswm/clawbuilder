@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.6.0] - 2026-03-23
+
+### Added
+- Gateway token display with copy button on deployment detail page — users can copy-paste the token into the OpenClaw dashboard instead of relying on broken `auth.html` redirect
+- API key removal buttons on Settings page — each saved key now has a "Remove" action
+- `attemptAutoFunnel()` helper for running deployments that missed initial funnel setup
+
+### Fixed
+- `clearActiveOperation` query was built but never awaited — operation locks were never actually cleared by the frontend
+- Tailscale auth key leaked in CLI args via `clawmacdo` wrapper's verbatim argv logging — now redacted
+- SSE lock cleared on client disconnect even when sidecar job still running — now only clears on normal stream completion
+- `droplet_hostname` not set for fresh platform-managed deploys — snapshot/destroy lookups by name would fail
+- Auto-funnel stuck permanently for deployments reaching `running` without IP — poll now continues for pending funnel setup
+- `isTailscaleAvailable` returned platform availability for legacy user-managed deployments — now returns `userKeyAvailable` field
+- Funnel retry success didn't update `tailscale_setup_status` locally — UI showed stale "failed" state until page reload
+- Polling continued indefinitely for running deployments with in-progress funnel setup
+
 ## [0.2.5.1] - 2026-03-23
 
 ### Fixed
