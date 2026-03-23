@@ -755,6 +755,48 @@ export async function retryCliCommand(
   return lastResult!;
 }
 
+/** Reset Tailscale identity on a snapshot-restored instance to prevent duplicate node keys.
+ *  Snapshot-restored instances boot with the original Tailscale node key baked in.
+ *  Running `tailscale logout` before `tailscale-funnel` forces a fresh identity. */
+async function resetTailscaleIdentity(ipAddress: string, sandboxDir?: string): Promise<void> {
+  if (!sandboxDir) return;
+  const { readdirSync } = await import('node:fs');
+  const { spawn } = await import('node:child_process');
+
+  // Find the SSH key in the sandbox
+  const keysDir = `${sandboxDir}/.clawmacdo/keys`;
+  let keyPath: string | null = null;
+  try {
+    const files = readdirSync(keysDir).filter((f: string) => f.startsWith('clawmacdo_') && !f.endsWith('.pub'));
+    if (files.length > 0) keyPath = `${keysDir}/${files[0]}`;
+  } catch {
+    console.log('[resetTailscaleIdentity] No SSH keys found in sandbox, skipping');
+    return;
+  }
+  if (!keyPath) return;
+
+  // SSH in and logout Tailscale (clears old node key from snapshot)
+  return new Promise((resolve) => {
+    const proc = spawn('ssh', [
+      '-o', 'StrictHostKeyChecking=no',
+      '-o', 'ConnectTimeout=30',
+      '-o', 'BatchMode=yes',
+      '-i', keyPath!,
+      `root@${ipAddress}`,
+      'command -v tailscale > /dev/null 2>&1 && tailscale logout 2>/dev/null; true',
+    ], { shell: false, timeout: 60_000 });
+
+    proc.on('close', (code) => {
+      console.log(`[resetTailscaleIdentity] Tailscale logout on ${ipAddress}: exit code ${code}`);
+      resolve();
+    });
+    proc.on('error', (err) => {
+      console.log(`[resetTailscaleIdentity] SSH failed (non-fatal): ${err.message}`);
+      resolve(); // Non-fatal — tailscale-funnel may still work
+    });
+  });
+}
+
 /** Shared helper: run tailscale-funnel CLI and parse output. Used by toggleFunnel and auto-funnel triggers. */
 async function executeFunnelSetup(opts: {
   ipAddress: string;
@@ -763,6 +805,9 @@ async function executeFunnelSetup(opts: {
   tailscaleHostname?: string;
 }): Promise<{ funnelUrl?: string; gatewayToken?: string; deviceId?: string }> {
   const { createTenantAuthKey, findDeviceByHostname } = await import('./tailscale-api');
+
+  // Reset Tailscale identity on snapshot-restored instances to prevent duplicate node keys
+  await resetTailscaleIdentity(opts.ipAddress, opts.sandboxDir);
 
   // Generate a fresh auth key (safe even if device is already connected — clawmacdo skips connect step)
   const tsKey = await createTenantAuthKey('platform-funnel-setup');
