@@ -6,6 +6,7 @@ import {
   validateModel,
   validateProvider,
   generateDeploymentName,
+  toCliModel,
   DEPLOYMENT_NAME_REGEX,
   REGIONS,
   SIZES,
@@ -272,5 +273,31 @@ describe('exported types', () => {
   it('Model type is assignable from a MODELS value', () => {
     const model: Model = 'anthropic';
     expect(model).toBe('anthropic');
+  });
+});
+
+describe('toCliModel', () => {
+  it('maps byteplus-arkmodel to byteplus', () => {
+    expect(toCliModel('byteplus-arkmodel')).toBe('byteplus');
+  });
+
+  it('passes through anthropic unchanged', () => {
+    expect(toCliModel('anthropic')).toBe('anthropic');
+  });
+
+  it('passes through openai unchanged', () => {
+    expect(toCliModel('openai')).toBe('openai');
+  });
+
+  it('passes through gemini unchanged', () => {
+    expect(toCliModel('gemini')).toBe('gemini');
+  });
+
+  it('throws on unknown model', () => {
+    expect(() => toCliModel('invalid')).toThrow(/Unknown model/);
+  });
+
+  it('throws on empty string', () => {
+    expect(() => toCliModel('')).toThrow(/Unknown model/);
   });
 });

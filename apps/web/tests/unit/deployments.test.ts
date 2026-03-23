@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { setCliExecutor, parseNdjson } from '../../src/lib/server/clawmacdo';
-import { normalizeStatus, buildCliBaseEnv } from '../../src/lib/server/deployments';
+import { normalizeStatus, buildCliBaseEnv, retryCliCommand } from '../../src/lib/server/deployments';
 import {
   validateDeploymentName,
   validateRegion,
@@ -136,21 +136,21 @@ describe('buildCliBaseEnv', () => {
     expect(result).toEqual({});
   });
 
-  it('returns BYTEPLUS_ARKMODEL_API_KEY when env var is set', () => {
+  it('returns BYTEPLUS_ARK_API_KEY when env var is set', () => {
     process.env = { ...originalEnv, BYTEPLUS_ARKMODEL_API_KEY: 'bp-test-key-123' };
     delete process.env.DO_TOKEN;
     const result = buildCliBaseEnv();
     expect(result).toEqual({ BYTEPLUS_ARK_API_KEY: 'bp-test-key-123' });
   });
 
-  it('omits BYTEPLUS_ARKMODEL_API_KEY when empty', () => {
+  it('omits BYTEPLUS_ARK_API_KEY when empty', () => {
     process.env = { ...originalEnv, BYTEPLUS_ARKMODEL_API_KEY: '' };
     delete process.env.DO_TOKEN;
     const result = buildCliBaseEnv();
     expect(result).toEqual({});
   });
 
-  it('returns both DO_TOKEN and BYTEPLUS_ARKMODEL_API_KEY together', () => {
+  it('returns both DO_TOKEN and BYTEPLUS_ARK_API_KEY together', () => {
     process.env = { ...originalEnv, DO_TOKEN: 'dop_v1_test123', BYTEPLUS_ARKMODEL_API_KEY: 'bp-test-key-123' };
     delete process.env.TAILSCALE_AUTH_KEY;
     const result = buildCliBaseEnv();
@@ -165,7 +165,7 @@ describe('buildCliBaseEnv', () => {
     expect(result).toEqual({});
   });
 
-  it('returns both DO_TOKEN and BYTEPLUS without TAILSCALE_AUTH_KEY', () => {
+  it('returns both DO_TOKEN and BYTEPLUS_ARK_API_KEY without TAILSCALE_AUTH_KEY', () => {
     process.env = {
       ...originalEnv,
       DO_TOKEN: 'dop_v1_test123',
@@ -312,6 +312,61 @@ describe('buildCliBaseEnv excludes platform Tailscale token', () => {
     };
     const result = buildCliBaseEnv();
     expect(result).toEqual({ DO_TOKEN: 'dop_v1_test' });
+  });
+});
+
+describe('retryCliCommand', () => {
+  it('returns immediately on success', async () => {
+    const mockResult = { stdout: 'ok', stderr: '', code: 0, sandboxDir: '/tmp/test' };
+    setCliExecutor(vi.fn().mockResolvedValue(mockResult));
+    const result = await retryCliCommand(['update-model', '--instance', '1.2.3.4'], {});
+    expect(result).toEqual(mockResult);
+  });
+
+  it('retries on Connection refused and succeeds', async () => {
+    const failResult = { stdout: '', stderr: 'ssh: connect to host 1.2.3.4 port 22: Connection refused', code: 1, sandboxDir: '/tmp/test' };
+    const successResult = { stdout: 'ok', stderr: '', code: 0, sandboxDir: '/tmp/test' };
+    const mock = vi.fn().mockResolvedValueOnce(failResult).mockResolvedValueOnce(successResult);
+    setCliExecutor(mock);
+    const result = await retryCliCommand(['update-model'], {}, { maxRetries: 2, baseDelayMs: 1 });
+    expect(result.code).toBe(0);
+    expect(mock).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries on Connection reset and succeeds', async () => {
+    const failResult = { stdout: '', stderr: 'Connection reset by peer', code: 1, sandboxDir: '/tmp/test' };
+    const successResult = { stdout: 'ok', stderr: '', code: 0, sandboxDir: '/tmp/test' };
+    const mock = vi.fn().mockResolvedValueOnce(failResult).mockResolvedValueOnce(successResult);
+    setCliExecutor(mock);
+    const result = await retryCliCommand(['update-model'], {}, { maxRetries: 2, baseDelayMs: 1 });
+    expect(result.code).toBe(0);
+    expect(mock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry on non-SSH errors', async () => {
+    const failResult = { stdout: '', stderr: 'Permission denied', code: 1, sandboxDir: '/tmp/test' };
+    const mock = vi.fn().mockResolvedValue(failResult);
+    setCliExecutor(mock);
+    const result = await retryCliCommand(['update-model'], {}, { maxRetries: 3, baseDelayMs: 1 });
+    expect(result.code).toBe(1);
+    expect(mock).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns last failure when retries exhausted', async () => {
+    const failResult = { stdout: '', stderr: 'Connection refused', code: 1, sandboxDir: '/tmp/test' };
+    const mock = vi.fn().mockResolvedValue(failResult);
+    setCliExecutor(mock);
+    const result = await retryCliCommand(['update-model'], {}, { maxRetries: 2, baseDelayMs: 1 });
+    expect(result.code).toBe(1);
+    expect(mock).toHaveBeenCalledTimes(3); // initial + 2 retries
+  });
+
+  it('defaults to 5 retries', async () => {
+    const failResult = { stdout: '', stderr: 'Connection refused', code: 1, sandboxDir: '/tmp/test' };
+    const mock = vi.fn().mockResolvedValue(failResult);
+    setCliExecutor(mock);
+    await retryCliCommand(['test'], {}, { baseDelayMs: 1 });
+    expect(mock).toHaveBeenCalledTimes(6); // initial + 5 retries
   });
 });
 

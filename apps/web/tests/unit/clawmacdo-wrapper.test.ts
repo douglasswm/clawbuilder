@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { execClawmacdo, parseNdjson, setCliExecutor } from '../../src/lib/server/clawmacdo';
+import { execClawmacdo, parseNdjson, setCliExecutor, redactArgs } from '../../src/lib/server/clawmacdo';
 
 beforeEach(() => setCliExecutor(null));
 afterEach(() => setCliExecutor(null));
@@ -41,6 +41,42 @@ describe('execClawmacdo with mock executor', () => {
 
     const result = await execClawmacdo(['track', 'some-id']);
     expect(result.sandboxDir).toBe(sandboxDir);
+  });
+});
+
+describe('redactArgs', () => {
+  it('redacts --tailscale-auth-key values', () => {
+    const result = redactArgs(['tailscale-funnel', '--tailscale-auth-key', 'tskey-secret-123', '--instance', '1.2.3.4']);
+    expect(result).toContain('[REDACTED]');
+    expect(result).not.toContain('tskey-secret-123');
+    expect(result).toContain('1.2.3.4');
+  });
+
+  it('redacts --byteplus-ark-api-key values', () => {
+    const result = redactArgs(['deploy', '--byteplus-ark-api-key', 'bp-secret-key', '--provider', 'do']);
+    expect(result).toContain('[REDACTED]');
+    expect(result).not.toContain('bp-secret-key');
+    expect(result).toContain('deploy');
+  });
+
+  it('redacts --bot-token values', () => {
+    const result = redactArgs(['deploy', '--bot-token', 'xoxb-secret', '--provider', 'do']);
+    expect(result).toContain('[REDACTED]');
+    expect(result).not.toContain('xoxb-secret');
+  });
+
+  it('does not redact non-sensitive arguments', () => {
+    const result = redactArgs(['deploy', '--provider', 'digitalocean', '--region', 'sgp1']);
+    expect(result).toContain('digitalocean');
+    expect(result).toContain('sgp1');
+    expect(result).not.toContain('[REDACTED]');
+  });
+
+  it('handles multiple sensitive flags in same command', () => {
+    const result = redactArgs(['deploy', '--tailscale-auth-key', 'ts-secret', '--byteplus-ark-api-key', 'bp-secret']);
+    expect(result).not.toContain('ts-secret');
+    expect(result).not.toContain('bp-secret');
+    expect(result.match(/\[REDACTED\]/g)?.length).toBe(2);
   });
 });
 

@@ -1247,56 +1247,61 @@ export const updateDeploymentAfterRestore = createServerFn({ method: 'POST' })
       .eq('id', deploymentId)
       .eq('user_id', user.id);
 
-    // Post-restore tasks: model update then funnel setup (sequenced)
+    // Fire-and-forget post-restore tasks: model update then funnel setup.
+    // Sequenced to avoid concurrent SSH/restart conflicts. Funnel always runs regardless of model outcome.
     const platformModel = process.env.PLATFORM_DEFAULT_MODEL || null;
     const postRestoreTarget = ip ?? hostname;
-    const cliEnv = buildCliBaseEnv();
 
-    // Step 1: Update model if platform default is set
-    if (platformModel && postRestoreTarget) {
-      try {
-        const modelResult = await retryCliCommand(
-          ['update-model', '--instance', postRestoreTarget, '--primary-model', toCliModel(platformModel)],
-          { sandboxDir: dep?.sandbox_dir ?? undefined, env: cliEnv, timeoutMs: 2 * 60_000 },
-          { label: 'updateDeploymentAfterRestore:update-model' },
-        );
-        if (modelResult.code !== 0) {
-          console.error('[updateDeploymentAfterRestore] update-model failed:', modelResult.stderr);
+    if (platformModel || (dep?.tailscale_managed && dep.tailscale_setup_status === 'pending' && ip)) {
+      const cliEnv = buildCliBaseEnv();
+      (async () => {
+        // Step 1: Update model if platform default is set
+        if (platformModel && postRestoreTarget) {
+          try {
+            const modelResult = await retryCliCommand(
+              ['update-model', '--instance', postRestoreTarget, '--primary-model', toCliModel(platformModel)],
+              { sandboxDir: dep?.sandbox_dir ?? undefined, env: cliEnv, timeoutMs: 2 * 60_000 },
+              { label: 'updateDeploymentAfterRestore:update-model' },
+            );
+            if (modelResult.code !== 0) {
+              console.error('[updateDeploymentAfterRestore] update-model failed:', modelResult.stderr);
+            }
+          } catch (err) {
+            console.error('[updateDeploymentAfterRestore] update-model error:', err);
+          }
         }
-      } catch (err) {
-        console.error('[updateDeploymentAfterRestore] update-model error:', err);
-      }
-    }
 
-    // Step 2: Auto-enable Funnel for platform-managed snapshot restores (always runs, not blocked by model update)
-    if (dep?.tailscale_managed && dep.tailscale_setup_status === 'pending' && ip) {
-      const { count: funnelClaim } = await supabase
-        .from('deployments')
-        .update({ tailscale_setup_status: 'in_progress' }, { count: 'exact' })
-        .eq('id', deploymentId)
-        .eq('tailscale_setup_status', 'pending');
+        // Step 2: Auto-enable Funnel for platform-managed snapshot restores (always runs, not blocked by model update)
+        if (dep?.tailscale_managed && dep.tailscale_setup_status === 'pending' && ip) {
+          const { count: funnelClaim } = await supabase
+            .from('deployments')
+            .update({ tailscale_setup_status: 'in_progress' }, { count: 'exact' })
+            .eq('id', deploymentId)
+            .eq('tailscale_setup_status', 'pending');
 
-      if (funnelClaim && funnelClaim > 0) {
-        try {
-          const funnelResult = await executeFunnelSetup({
-            ipAddress: ip,
-            sandboxDir: dep.sandbox_dir ?? undefined,
-            cliEnv,
-            tailscaleHostname: hostname ?? undefined,
-          });
-          const funnelUpdates: Record<string, unknown> = {
-            tailscale_setup_status: 'configured',
-            tailscale_configured: true,
-          };
-          if (funnelResult.funnelUrl) funnelUpdates.funnel_url = funnelResult.funnelUrl;
-          if (funnelResult.gatewayToken) funnelUpdates.gateway_token = funnelResult.gatewayToken;
-          if (funnelResult.deviceId) funnelUpdates.tailscale_device_id = funnelResult.deviceId;
-          await supabase.from('deployments').update(funnelUpdates).eq('id', deploymentId);
-        } catch (err) {
-          console.error('[updateDeploymentAfterRestore] Auto-funnel failed:', err);
-          await supabase.from('deployments').update({ tailscale_setup_status: 'failed' }).eq('id', deploymentId);
+          if (funnelClaim && funnelClaim > 0) {
+            try {
+              const funnelResult = await executeFunnelSetup({
+                ipAddress: ip,
+                sandboxDir: dep.sandbox_dir ?? undefined,
+                cliEnv,
+                tailscaleHostname: hostname ?? undefined,
+              });
+              const funnelUpdates: Record<string, unknown> = {
+                tailscale_setup_status: 'configured',
+                tailscale_configured: true,
+              };
+              if (funnelResult.funnelUrl) funnelUpdates.funnel_url = funnelResult.funnelUrl;
+              if (funnelResult.gatewayToken) funnelUpdates.gateway_token = funnelResult.gatewayToken;
+              if (funnelResult.deviceId) funnelUpdates.tailscale_device_id = funnelResult.deviceId;
+              await supabase.from('deployments').update(funnelUpdates).eq('id', deploymentId);
+            } catch (err) {
+              console.error('[updateDeploymentAfterRestore] Auto-funnel failed:', err);
+              await supabase.from('deployments').update({ tailscale_setup_status: 'failed' }).eq('id', deploymentId);
+            }
+          }
         }
-      }
+      })().catch((err) => console.error('[updateDeploymentAfterRestore] Post-restore tasks failed:', err));
     }
 
     return { success: true };
