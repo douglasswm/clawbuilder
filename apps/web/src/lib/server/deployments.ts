@@ -757,7 +757,8 @@ export async function retryCliCommand(
 
 /** Reset Tailscale identity on a snapshot-restored instance to prevent duplicate node keys.
  *  Snapshot-restored instances boot with the original Tailscale node key baked in.
- *  Running `tailscale logout` before `tailscale-funnel` forces a fresh identity. */
+ *  Stops tailscaled, removes the state file containing the old node key, and restarts
+ *  the service so tailscale-funnel can do a clean `tailscale up` with a fresh identity. */
 async function resetTailscaleIdentity(ipAddress: string, sandboxDir?: string): Promise<void> {
   if (!sandboxDir) return;
   const { readdirSync } = await import('node:fs');
@@ -775,7 +776,20 @@ async function resetTailscaleIdentity(ipAddress: string, sandboxDir?: string): P
   }
   if (!keyPath) return;
 
-  // SSH in and logout Tailscale (clears old node key from snapshot)
+  // Stop tailscaled, remove old state (node key + machine key), restart.
+  // This is more surgical than `tailscale logout` which can leave the service in a broken state.
+  const resetCmd = [
+    'if command -v tailscale > /dev/null 2>&1; then',
+    '  systemctl stop tailscaled 2>/dev/null || true;',
+    '  rm -f /var/lib/tailscale/tailscaled.state 2>/dev/null || true;',
+    '  systemctl start tailscaled 2>/dev/null || true;',
+    '  sleep 2;',
+    '  echo "TAILSCALE_RESET_OK";',
+    'else',
+    '  echo "TAILSCALE_NOT_INSTALLED";',
+    'fi',
+  ].join(' ');
+
   return new Promise((resolve) => {
     const proc = spawn('ssh', [
       '-o', 'StrictHostKeyChecking=no',
@@ -783,16 +797,21 @@ async function resetTailscaleIdentity(ipAddress: string, sandboxDir?: string): P
       '-o', 'BatchMode=yes',
       '-i', keyPath!,
       `root@${ipAddress}`,
-      'command -v tailscale > /dev/null 2>&1 && tailscale logout 2>/dev/null; true',
+      resetCmd,
     ], { shell: false, timeout: 60_000 });
 
+    let stdout = '';
+    proc.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+
     proc.on('close', (code) => {
-      console.log(`[resetTailscaleIdentity] Tailscale logout on ${ipAddress}: exit code ${code}`);
+      const status = stdout.includes('TAILSCALE_RESET_OK') ? 'reset' :
+                     stdout.includes('TAILSCALE_NOT_INSTALLED') ? 'not installed' : `exit ${code}`;
+      console.log(`[resetTailscaleIdentity] ${ipAddress}: ${status}`);
       resolve();
     });
     proc.on('error', (err) => {
       console.log(`[resetTailscaleIdentity] SSH failed (non-fatal): ${err.message}`);
-      resolve(); // Non-fatal — tailscale-funnel may still work
+      resolve(); // Non-fatal — tailscale-funnel will handle installation
     });
   });
 }
