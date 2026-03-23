@@ -1399,6 +1399,10 @@ export const telegramSetup = createServerFn({ method: 'POST' })
       throw new Error(sanitize(String(err)));
     }
 
+    // Log full CLI output for debugging
+    if (result.stdout) console.log('[telegramSetup] CLI stdout:', sanitize(result.stdout));
+    if (result.stderr) console.error('[telegramSetup] CLI stderr:', sanitize(result.stderr));
+
     if (result.code !== 0) {
       const userMsg = result.code === 124
         ? 'Setup timed out. The instance may be slow to respond.'
@@ -1407,6 +1411,22 @@ export const telegramSetup = createServerFn({ method: 'POST' })
         .update({ telegram_status: 'failed', telegram_error: userMsg })
         .eq('id', dep.id);
       throw new Error(sanitize(result.stderr) || userMsg);
+    }
+
+    // Check CLI stdout for signs of failure (CLI uses || true so exit code is always 0)
+    const stdout = result.stdout.toLowerCase();
+    const setupFailed = stdout.includes('no deploy record found') ||
+      stdout.includes('connection refused') ||
+      stdout.includes('permission denied') ||
+      stdout.includes('host key verification failed');
+
+    if (setupFailed) {
+      const userMsg = 'Telegram setup could not reach the instance. Please verify the deployment is running.';
+      console.error('[telegramSetup] Setup likely failed despite exit code 0:', sanitize(result.stdout));
+      await supabase.from('deployments')
+        .update({ telegram_status: 'failed', telegram_error: userMsg })
+        .eq('id', dep.id);
+      throw new Error(userMsg);
     }
 
     await supabase.from('deployments')
