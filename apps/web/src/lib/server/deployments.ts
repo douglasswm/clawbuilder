@@ -1401,7 +1401,7 @@ export const telegramSetup = createServerFn({ method: 'POST' })
     try {
       result = await execClawmacdo(
         ['telegram-setup', '--instance', instance, '--bot-token', botToken],
-        { sandboxDir: dep.sandbox_dir ?? undefined, env: cliEnv, timeoutMs: 60_000 },
+        { sandboxDir: dep.sandbox_dir ?? undefined, env: cliEnv, timeoutMs: 120_000 },
       );
     } catch (err) {
       await supabase.from('deployments')
@@ -1415,13 +1415,20 @@ export const telegramSetup = createServerFn({ method: 'POST' })
     if (result.stderr) console.error('[telegramSetup] CLI stderr:', sanitize(result.stderr));
 
     if (result.code !== 0) {
-      const userMsg = result.code === 124
-        ? 'Setup timed out. The instance may be slow to respond.'
-        : 'Telegram setup failed. Please check that the instance is reachable.';
-      await supabase.from('deployments')
-        .update({ telegram_status: 'failed', telegram_error: userMsg })
-        .eq('id', dep.id);
-      throw new Error(sanitize(result.stderr) || userMsg);
+      // Timeout (code 124) but setup may have completed — check stdout for success indicator
+      const setupCompleted = result.stdout.includes('Telegram bot configured');
+      if (result.code === 124 && setupCompleted) {
+        console.log('[telegramSetup] CLI timed out but setup completed successfully');
+        // Fall through to success path
+      } else {
+        const userMsg = result.code === 124
+          ? 'Setup timed out. The instance may be slow to respond.'
+          : 'Telegram setup failed. Please check that the instance is reachable.';
+        await supabase.from('deployments')
+          .update({ telegram_status: 'failed', telegram_error: userMsg })
+          .eq('id', dep.id);
+        throw new Error(sanitize(result.stderr) || userMsg);
+      }
     }
 
     // Check CLI stdout for signs of failure (CLI uses || true so exit code is always 0)
