@@ -1359,10 +1359,16 @@ export const telegramSetup = createServerFn({ method: 'POST' })
       throw new Error('Telegram setup is already in progress.');
     }
 
-    const botToken = ctx.data.botToken;
+    const botToken = ctx.data.botToken.trim();
     const sanitize = (s: string) => s.replaceAll(botToken, '[REDACTED]');
 
-    // Validate bot token via Telegram API and get bot username
+    // Validate bot token format before any external calls
+    if (!/^\d{8,10}:[A-Za-z0-9_-]{35}$/.test(botToken)) {
+      await supabase.from('deployments').update({ telegram_status: null, telegram_error: null }).eq('id', dep.id);
+      throw new Error('Invalid bot token format. Expected format: 123456789:ABCdef...');
+    }
+
+    // Verify token with Telegram API and get bot username
     let botUsername: string;
     try {
       const meRes = await fetch(`https://api.telegram.org/bot${botToken}/getMe`);
@@ -1377,11 +1383,6 @@ export const telegramSetup = createServerFn({ method: 'POST' })
       await supabase.from('deployments').update({ telegram_status: null, telegram_error: null }).eq('id', dep.id);
       throw new Error('Could not verify bot token. Please check your internet connection and try again.');
     }
-
-    // Store bot username
-    await supabase.from('deployments')
-      .update({ telegram_bot_username: botUsername })
-      .eq('id', dep.id);
 
     // Run CLI
     const cliEnv = buildCliBaseEnv();
@@ -1409,7 +1410,7 @@ export const telegramSetup = createServerFn({ method: 'POST' })
     }
 
     await supabase.from('deployments')
-      .update({ telegram_status: 'awaiting_pairing' })
+      .update({ telegram_status: 'awaiting_pairing', telegram_bot_username: botUsername })
       .eq('id', dep.id);
 
     return { success: true, botUsername };
@@ -1470,10 +1471,11 @@ export const telegramPair = createServerFn({ method: 'POST' })
 
     if (result.code !== 0) {
       const userMsg = 'Pairing failed. Please check the code and try again.';
+      if (result.stderr) console.error('[telegramPair] CLI stderr:', result.stderr);
       await supabase.from('deployments')
         .update({ telegram_status: 'awaiting_pairing', telegram_error: userMsg })
         .eq('id', dep.id);
-      throw new Error(result.stderr || userMsg);
+      throw new Error(userMsg);
     }
 
     await supabase.from('deployments')

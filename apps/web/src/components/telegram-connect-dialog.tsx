@@ -83,8 +83,14 @@ export function TelegramConnectDialog({
     }
   }, [telegramBotUsername]);
 
-  // Reset local error when dialog opens or status changes
+  // Reset all local state when dialog opens or status changes
   useEffect(() => {
+    if (open) {
+      setBotToken('');
+      setShowToken(false);
+      setPairingCode('');
+      setLoading(false);
+    }
     setError(null);
   }, [open, telegramStatus]);
 
