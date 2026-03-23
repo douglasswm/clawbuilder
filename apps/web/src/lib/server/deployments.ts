@@ -58,6 +58,9 @@ export interface Deployment {
   active_operation_id?: string;
   last_operation_id?: string;
   template_id?: string;
+  telegram_status?: 'setting_up' | 'awaiting_pairing' | 'pairing' | 'paired' | 'failed' | null;
+  telegram_bot_username?: string | null;
+  telegram_error?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -1267,6 +1270,151 @@ export const clearActiveOperation = createServerFn({ method: 'POST' })
     }
 
     await query;
+
+    return { success: true };
+  });
+
+/** Set up Telegram bot on a deployed instance */
+export const telegramSetup = createServerFn({ method: 'POST' })
+  .inputValidator((data: { deploymentId: string; botToken: string }) => data)
+  .handler(async (ctx) => {
+    const { execClawmacdo } = await import('./clawmacdo');
+    const { supabase, user } = await getAuthenticatedClient();
+
+    const { data: deployment } = await supabase
+      .from('deployments')
+      .select('*')
+      .eq('id', ctx.data.deploymentId)
+      .eq('user_id', user.id)
+      .maybeSingle();
+
+    if (!deployment) throw new Response('Not found', { status: 404 });
+    const dep = deployment as Deployment;
+
+    if (dep.status !== 'running') {
+      throw new Error('Telegram can only be set up on a running deployment.');
+    }
+
+    const instance = dep.cli_deploy_id ?? dep.ip_address;
+    if (!instance) {
+      throw new Error('No instance identifier available. Deployment may still be provisioning.');
+    }
+
+    // CAS lock: only proceed if not already setting up
+    const { count: claimed } = await supabase
+      .from('deployments')
+      .update({ telegram_status: 'setting_up', telegram_error: null }, { count: 'exact' })
+      .eq('id', dep.id)
+      .or('telegram_status.is.null,telegram_status.eq.failed');
+
+    if (!claimed || claimed === 0) {
+      throw new Error('Telegram setup is already in progress.');
+    }
+
+    const botToken = ctx.data.botToken;
+    const sanitize = (s: string) => s.replaceAll(botToken, '[REDACTED]');
+
+    // Validate bot token via Telegram API and get bot username
+    let botUsername: string;
+    try {
+      const meRes = await fetch(`https://api.telegram.org/bot${botToken}/getMe`);
+      const meData = await meRes.json() as { ok: boolean; result?: { username?: string } };
+      if (!meData.ok || !meData.result?.username) {
+        await supabase.from('deployments').update({ telegram_status: null, telegram_error: null }).eq('id', dep.id);
+        throw new Error('Invalid bot token. Please check your token from @BotFather.');
+      }
+      botUsername = meData.result.username;
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('Invalid bot token')) throw err;
+      await supabase.from('deployments').update({ telegram_status: null, telegram_error: null }).eq('id', dep.id);
+      throw new Error('Could not verify bot token. Please check your internet connection and try again.');
+    }
+
+    // Store bot username
+    await supabase.from('deployments')
+      .update({ telegram_bot_username: botUsername })
+      .eq('id', dep.id);
+
+    // Run CLI
+    const cliEnv = buildCliBaseEnv();
+    const result = await execClawmacdo(
+      ['telegram-setup', '--instance', instance, '--bot-token', botToken],
+      { sandboxDir: dep.sandbox_dir ?? undefined, env: cliEnv, timeoutMs: 60_000 },
+    );
+
+    if (result.code !== 0) {
+      const userMsg = result.code === 124
+        ? 'Setup timed out. The instance may be slow to respond.'
+        : 'Telegram setup failed. Please check that the instance is reachable.';
+      await supabase.from('deployments')
+        .update({ telegram_status: 'failed', telegram_error: userMsg })
+        .eq('id', dep.id);
+      throw new Error(sanitize(result.stderr) || userMsg);
+    }
+
+    await supabase.from('deployments')
+      .update({ telegram_status: 'awaiting_pairing' })
+      .eq('id', dep.id);
+
+    return { success: true, botUsername };
+  });
+
+/** Approve a Telegram pairing code on a deployed instance */
+export const telegramPair = createServerFn({ method: 'POST' })
+  .inputValidator((data: { deploymentId: string; code: string }) => data)
+  .handler(async (ctx) => {
+    const { execClawmacdo } = await import('./clawmacdo');
+    const { supabase, user } = await getAuthenticatedClient();
+
+    const { data: deployment } = await supabase
+      .from('deployments')
+      .select('*')
+      .eq('id', ctx.data.deploymentId)
+      .eq('user_id', user.id)
+      .maybeSingle();
+
+    if (!deployment) throw new Response('Not found', { status: 404 });
+    const dep = deployment as Deployment;
+
+    // Validate code format
+    const code = ctx.data.code.trim().toUpperCase();
+    if (code.length !== 8 || !/^[A-Z0-9]+$/.test(code)) {
+      throw new Error('Invalid pairing code. Must be 8 alphanumeric characters.');
+    }
+
+    const instance = dep.cli_deploy_id ?? dep.ip_address;
+    if (!instance) {
+      throw new Error('No instance identifier available.');
+    }
+
+    // CAS lock: only proceed if awaiting_pairing
+    const { count: claimed } = await supabase
+      .from('deployments')
+      .update({ telegram_status: 'pairing', telegram_error: null }, { count: 'exact' })
+      .eq('id', dep.id)
+      .eq('telegram_status', 'awaiting_pairing');
+
+    if (!claimed || claimed === 0) {
+      throw new Error('Telegram is not ready for pairing.');
+    }
+
+    const cliEnv = buildCliBaseEnv();
+    const result = await execClawmacdo(
+      ['telegram-pair', '--instance', instance, '--code', code],
+      { sandboxDir: dep.sandbox_dir ?? undefined, env: cliEnv, timeoutMs: 30_000 },
+    );
+
+    if (result.code !== 0) {
+      const userMsg = 'Pairing failed. Please check the code and try again.';
+      await supabase.from('deployments')
+        .update({ telegram_status: 'awaiting_pairing', telegram_error: userMsg })
+        .eq('id', dep.id);
+      throw new Error(result.stderr || userMsg);
+    }
+
+    await supabase.from('deployments')
+      .update({ telegram_status: 'paired', telegram_error: null })
+      .eq('id', dep.id);
 
     return { success: true };
   });

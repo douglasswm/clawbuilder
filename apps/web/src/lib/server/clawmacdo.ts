@@ -66,7 +66,7 @@ export function execClawmacdo(args: string[], options: ExecOptions = {}): Promis
 
     const startMs = Date.now();
     const logArgs = args.map((a, i) =>
-      args[i - 1] === '--tailscale-auth-key' ? '[REDACTED]' : a
+      args[i - 1] === '--tailscale-auth-key' || args[i - 1] === '--bot-token' ? '[REDACTED]' : a
     ).join(' ');
     console.log(`[clawmacdo] Spawning: clawmacdo ${logArgs}`);
 
