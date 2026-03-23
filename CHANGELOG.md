@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.7.0] - 2026-03-23
+
+### Added
+- Telegram bot pairing wizard on deployment detail page — multi-step dialog with BotFather instructions, QR codes, token validation, and pairing code flow
+- `telegramSetup` and `telegramPair` server functions with CAS locking and bot token scrubbing
+- `telegram_status`, `telegram_bot_username`, and `telegram_error` columns with CHECK constraint
+- Bot token format validation via regex and Telegram `getMe` API verification
+- `toCliModel` helper for mapping platform model identifiers to CLI model identifiers
+
+### Fixed
+- CLI stderr no longer leaked to client in error responses — logged server-side only
+- `BYTEPLUS_ARKMODEL_API_KEY` env var now correctly mapped to `BYTEPLUS_ARK_API_KEY` for CLI
+
 ## [0.2.6.0] - 2026-03-23
 
 ### Added
