@@ -451,6 +451,19 @@ function DeploymentDetailPage() {
                   </div>
                 ) : deployment.tailscale_setup_status === 'configured' && deployment.funnel_url ? (
                   <div className="space-y-3">
+                    {/* Show warming-up notice for recently configured funnels (gateway needs 1-2 min to boot) */}
+                    {(() => {
+                      const updatedAt = new Date(deployment.updated_at).getTime();
+                      const ageMs = Date.now() - updatedAt;
+                      const isRecent = ageMs < 3 * 60 * 1000; // within 3 minutes
+                      return isRecent ? (
+                        <div className="rounded-md border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950 px-3 py-2">
+                          <p className="text-xs text-amber-800 dark:text-amber-200">
+                            Your agent is starting up — the URL may take 1-2 minutes to respond.
+                          </p>
+                        </div>
+                      ) : null;
+                    })()}
                     <div>
                       <p className="text-xs text-muted-foreground">Public URL</p>
                       <a
@@ -533,6 +546,19 @@ function DeploymentDetailPage() {
                   </div>
                 ) : deployment.funnel_url ? (
                   <div className="space-y-3">
+                    {/* Show warming-up notice for recently configured funnels */}
+                    {(() => {
+                      const updatedAt = new Date(deployment.updated_at).getTime();
+                      const ageMs = Date.now() - updatedAt;
+                      const isRecent = ageMs < 3 * 60 * 1000;
+                      return isRecent ? (
+                        <div className="rounded-md border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950 px-3 py-2">
+                          <p className="text-xs text-amber-800 dark:text-amber-200">
+                            Your agent is starting up — the URL may take 1-2 minutes to respond.
+                          </p>
+                        </div>
+                      ) : null;
+                    })()}
                     <div>
                       <p className="text-xs text-muted-foreground">Public URL</p>
                       <a
