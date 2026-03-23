@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { getDeploymentDetail, pollDeploymentStatus, destroyDeployment, toggleFunnel, isTailscaleAvailable, getOperationSteps, TERMINAL_STATUSES } from '../../../lib/server/deployments';
+import { getDeploymentDetail, pollDeploymentStatus, destroyDeployment, toggleFunnel, isTailscaleAvailable, getOperationSteps, clearActiveOperation, TERMINAL_STATUSES } from '../../../lib/server/deployments';
 import { StatusBadge } from '../../../components/status-badge';
 import { OperationProgressBar } from '../../../components/operation-progress-bar';
 import { Progress } from '@workspace/ui/components/progress';
@@ -60,7 +60,8 @@ function DeploymentDetailPage() {
   // Check if platform has Tailscale configured
   useEffect(() => {
     isTailscaleAvailable().then((res) => {
-      if (isMounted.current) setTailscaleAvailable(res.available);
+      // For user-managed deployments, use userKeyAvailable (not platform availability)
+      if (isMounted.current) setTailscaleAvailable(res.userKeyAvailable ?? res.available);
     }).catch(() => {
       if (isMounted.current) setTailscaleAvailable(false);
     });
@@ -94,12 +95,16 @@ function DeploymentDetailPage() {
         const next = dep as Deployment;
         if (prev.status === next.status && prev.current_step === next.current_step &&
             prev.ip_address === next.ip_address && prev.persona_pushed === next.persona_pushed &&
-            prev.error_message === next.error_message && prev.step_label === next.step_label) {
+            prev.error_message === next.error_message && prev.step_label === next.step_label &&
+            prev.tailscale_setup_status === next.tailscale_setup_status && prev.funnel_url === next.funnel_url) {
           return prev;
         }
         return next;
       });
-      if (TERMINAL_STATUSES.has(dep.status)) {
+      // Stop polling only when deployment is terminal AND funnel setup is complete (or not applicable)
+      const funnelDone = !dep.tailscale_managed ||
+        (dep.tailscale_setup_status !== 'pending' && dep.tailscale_setup_status !== 'in_progress');
+      if (TERMINAL_STATUSES.has(dep.status) && funnelDone) {
         if (pollingRef.current) {
           clearInterval(pollingRef.current);
           pollingRef.current = null;
@@ -113,7 +118,11 @@ function DeploymentDetailPage() {
   useEffect(() => {
     isMounted.current = true;
     loadDeployment().then((dep) => {
-      if (isMounted.current && dep && !TERMINAL_STATUSES.has(dep.status)) {
+      if (!isMounted.current || !dep) return;
+      // Keep polling if deployment is not terminal, OR if funnel setup is still in progress
+      const needsPoll = !TERMINAL_STATUSES.has(dep.status) ||
+        (dep.tailscale_managed && (dep.tailscale_setup_status === 'pending' || dep.tailscale_setup_status === 'in_progress'));
+      if (needsPoll) {
         pollingRef.current = setInterval(poll, 10_000);
       }
     });
@@ -148,12 +157,14 @@ function DeploymentDetailPage() {
     }
   }, [activeProgress.status, operationStartedAt]);
 
-  // Reload deployment when operation completes to clear active_operation_id
+  // Clear the operation lock and reload deployment when snapshot completes or fails
   useEffect(() => {
     if (activeProgress.status === 'completed' || activeProgress.status === 'error') {
-      loadDeployment();
+      clearActiveOperation({ data: { deploymentId, operationId: activeProgress.operationId ?? undefined } }).finally(() => {
+        loadDeployment();
+      });
     }
-  }, [activeProgress.status, loadDeployment]);
+  }, [activeProgress.status, deploymentId, loadDeployment]);
 
   const handleSnapshot = () => {
     if (!snapshotName.trim()) return;
@@ -206,6 +217,7 @@ function DeploymentDetailPage() {
               funnel_url: result.funnelUrl ?? undefined,
               gateway_token: result.gatewayToken ?? undefined,
               tailscale_configured: true,
+              tailscale_setup_status: 'configured',
             } : prev);
           }
         };
@@ -216,6 +228,7 @@ function DeploymentDetailPage() {
           funnel_url: result.funnelUrl ?? undefined,
           gateway_token: result.gatewayToken ?? undefined,
           tailscale_configured: action === 'on' ? true : prev.tailscale_configured,
+          tailscale_setup_status: action === 'on' ? 'configured' : prev.tailscale_setup_status,
         } : prev);
       }
     } catch (err) {
@@ -375,61 +388,168 @@ function DeploymentDetailPage() {
           {showFunnelCard && (
             <div className="rounded-lg border p-4 space-y-3">
               <p className="text-sm font-medium">Tailscale Funnel</p>
-              {funnelRevealing ? (
-                <div className="space-y-2">
-                  <p className="text-xs text-muted-foreground">Setting up public access...</p>
-                  <Progress value={revealProgress} />
-                  <p className="text-xs text-muted-foreground text-right">{revealProgress}%</p>
-                </div>
-              ) : deployment.funnel_url ? (
-                <div className="space-y-3">
-                  <div>
-                    <p className="text-xs text-muted-foreground">Public URL</p>
-                    <a
-                      href={deployment.funnel_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-sm font-mono text-blue-600 hover:underline break-all"
-                    >
-                      {deployment.funnel_url}
-                    </a>
+              {deployment.tailscale_managed ? (
+                // Platform-managed: state machine UI
+                deployment.tailscale_setup_status === 'pending' || deployment.tailscale_setup_status === 'in_progress' ? (
+                  <div className="space-y-2">
+                    <p className="text-xs text-muted-foreground">
+                      {deployment.tailscale_setup_status === 'pending' ? 'Waiting for Funnel setup...' : 'Setting up public access...'}
+                    </p>
+                    <Progress value={deployment.tailscale_setup_status === 'in_progress' ? 50 : 10} />
                   </div>
-                  {funnelError && (
-                    <p className="text-xs text-red-600">{funnelError}</p>
-                  )}
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handleFunnelToggle('off')}
-                    disabled={funnelToggling}
-                  >
-                    {funnelToggling ? 'Turning off...' : 'Turn Off Funnel'}
-                  </Button>
-                </div>
-              ) : tailscaleAvailable === false ? (
-                <div className="space-y-2">
-                  <p className="text-xs text-muted-foreground">
-                    Add your Tailscale auth key in{' '}
-                    <a href="/settings" className="text-blue-600 hover:underline">Settings</a>{' '}
-                    to enable public HTTPS access via Tailscale Funnel.
-                  </p>
-                </div>
+                ) : deployment.tailscale_setup_status === 'configured' && deployment.funnel_url ? (
+                  <div className="space-y-3">
+                    <div>
+                      <p className="text-xs text-muted-foreground">Public URL</p>
+                      <a
+                        href={deployment.funnel_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm font-mono text-blue-600 hover:underline break-all"
+                      >
+                        {deployment.funnel_url}
+                      </a>
+                    </div>
+                    {deployment.gateway_token && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Gateway Token</p>
+                        <div className="flex items-center gap-2">
+                          <code className="text-xs font-mono bg-muted px-2 py-1 rounded break-all select-all">
+                            {deployment.gateway_token}
+                          </code>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2 text-xs"
+                            onClick={() => {
+                              navigator.clipboard.writeText(deployment.gateway_token!);
+                            }}
+                          >
+                            Copy
+                          </Button>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1">Paste this into the Gateway Token field on the dashboard</p>
+                      </div>
+                    )}
+                    {funnelError && (
+                      <p className="text-xs text-red-600">{funnelError}</p>
+                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleFunnelToggle('off')}
+                      disabled={funnelToggling}
+                    >
+                      {funnelToggling ? 'Turning off...' : 'Turn Off Funnel'}
+                    </Button>
+                  </div>
+                ) : deployment.tailscale_setup_status === 'failed' ? (
+                  <div className="space-y-3">
+                    <p className="text-xs text-red-600">Funnel setup failed. You can retry below.</p>
+                    {funnelError && (
+                      <p className="text-xs text-red-600">{funnelError}</p>
+                    )}
+                    <Button
+                      size="sm"
+                      onClick={() => handleFunnelToggle('on')}
+                      disabled={funnelToggling}
+                    >
+                      {funnelToggling ? 'Retrying...' : 'Retry Funnel Setup'}
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <p className="text-xs text-muted-foreground">
+                      Enable Tailscale Funnel for public HTTPS access to this agent.
+                    </p>
+                    <Button
+                      size="sm"
+                      onClick={() => handleFunnelToggle('on')}
+                      disabled={funnelToggling}
+                    >
+                      {funnelToggling ? 'Enabling...' : 'Enable Funnel'}
+                    </Button>
+                  </div>
+                )
               ) : (
-                <div className="space-y-3">
-                  <p className="text-xs text-muted-foreground">
-                    Enable Tailscale Funnel for public HTTPS access to this agent.
-                  </p>
-                  {funnelError && (
-                    <p className="text-xs text-red-600">{funnelError}</p>
-                  )}
-                  <Button
-                    size="sm"
-                    onClick={() => handleFunnelToggle('on')}
-                    disabled={funnelToggling}
-                  >
-                    {funnelToggling ? 'Enabling...' : 'Enable Funnel'}
-                  </Button>
-                </div>
+                // User-managed: existing behavior
+                funnelRevealing ? (
+                  <div className="space-y-2">
+                    <p className="text-xs text-muted-foreground">Setting up public access...</p>
+                    <Progress value={revealProgress} />
+                    <p className="text-xs text-muted-foreground text-right">{revealProgress}%</p>
+                  </div>
+                ) : deployment.funnel_url ? (
+                  <div className="space-y-3">
+                    <div>
+                      <p className="text-xs text-muted-foreground">Public URL</p>
+                      <a
+                        href={deployment.funnel_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm font-mono text-blue-600 hover:underline break-all"
+                      >
+                        {deployment.funnel_url}
+                      </a>
+                    </div>
+                    {deployment.gateway_token && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Gateway Token</p>
+                        <div className="flex items-center gap-2">
+                          <code className="text-xs font-mono bg-muted px-2 py-1 rounded break-all select-all">
+                            {deployment.gateway_token}
+                          </code>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2 text-xs"
+                            onClick={() => {
+                              navigator.clipboard.writeText(deployment.gateway_token!);
+                            }}
+                          >
+                            Copy
+                          </Button>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1">Paste this into the Gateway Token field on the dashboard</p>
+                      </div>
+                    )}
+                    {funnelError && (
+                      <p className="text-xs text-red-600">{funnelError}</p>
+                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleFunnelToggle('off')}
+                      disabled={funnelToggling}
+                    >
+                      {funnelToggling ? 'Turning off...' : 'Turn Off Funnel'}
+                    </Button>
+                  </div>
+                ) : tailscaleAvailable === false ? (
+                  <div className="space-y-2">
+                    <p className="text-xs text-muted-foreground">
+                      Add your Tailscale auth key in{' '}
+                      <a href="/settings" className="text-blue-600 hover:underline">Settings</a>{' '}
+                      to enable public HTTPS access via Tailscale Funnel.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <p className="text-xs text-muted-foreground">
+                      Enable Tailscale Funnel for public HTTPS access to this agent.
+                    </p>
+                    {funnelError && (
+                      <p className="text-xs text-red-600">{funnelError}</p>
+                    )}
+                    <Button
+                      size="sm"
+                      onClick={() => handleFunnelToggle('on')}
+                      disabled={funnelToggling}
+                    >
+                      {funnelToggling ? 'Enabling...' : 'Enable Funnel'}
+                    </Button>
+                  </div>
+                )
               )}
             </div>
           )}

@@ -184,6 +184,42 @@
 **Priority:** P2
 **Depends on:** Snapshot/restore SSE feature (v0.2.4.0)
 
+## Tailscale
+
+### Unify CLI spawn and sidecar HOME directories
+
+**What:** Make all clawmacdo operations use a single deploy record store so the sidecar can find records from CLI-spawned deploys.
+
+**Why:** The sidecar runs with `HOME=process.env.HOME` (real home) while CLI spawns use sandbox HOME. Deploy records at `~/.clawmacdo/deploys/` are HOME-relative. This prevents using the sidecar's Funnel REST endpoints for CLI-deployed instances. Blocks the "Migrate deploy flow to sidecar" TODO.
+
+**Context:** Discovered during platform Tailscale eng review. The sidecar's `POST /api/deployments/{id}/funnel` can't find deploy records from fresh deploys because they're in a different HOME. Current workaround: use CLI spawn for all Funnel operations (consistent with existing `toggleFunnel()`).
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** Understanding clawmacdo's sandbox isolation requirements (read-only dep)
+
+### Tailscale API token rotation automation
+
+**What:** Automate the 90-day rotation cycle for the platform Tailscale API token (`tskey-api-*`).
+
+**Why:** If the token expires silently, all new deploys fail to generate auth keys. Migration doc Section 9 flags this as a security checklist item. Current mitigation is a calendar reminder.
+
+**Context:** Options include: cron job that calls Tailscale API to generate a new token and updates the secrets manager, or alerting when token is within 14 days of expiry.
+
+**Effort:** S
+**Priority:** P2
+**Depends on:** Platform-managed Tailscale (feat/platform-tailscale)
+
+### Orphan device cleanup
+
+**What:** Periodic cleanup of Tailscale devices that joined the tailnet but have no corresponding `tailscale_device_id` in the database.
+
+**Why:** If device discovery via `findDeviceByHostname()` fails or the app crashes between auth key consumption and metadata persistence, devices are orphaned. Device count is a billable/finite resource on the Tailscale plan.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** Platform-managed Tailscale (feat/platform-tailscale)
+
 ## Completed
 
 ### E2E test infrastructure for auth flow

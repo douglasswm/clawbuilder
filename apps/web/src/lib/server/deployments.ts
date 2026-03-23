@@ -1,4 +1,5 @@
 import { createServerFn } from '@tanstack/react-start';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { getAuthenticatedClient } from './auth-helpers';
 import { validateDeploymentName, validateRegion, validateSize, validateProvider, PROVIDER_LABELS } from '../validation';
 
@@ -10,8 +11,8 @@ export function buildCliBaseEnv(): Record<string, string> {
   if (doToken) env['DO_TOKEN'] = doToken;
   const byteplusKey = process.env.BYTEPLUS_ARKMODEL_API_KEY;
   if (byteplusKey) env['BYTEPLUS_ARKMODEL_API_KEY'] = byteplusKey;
-  const tsAuthKey = process.env.TAILSCALE_AUTH_KEY;
-  if (tsAuthKey) env['TAILSCALE_AUTH_KEY'] = tsAuthKey;
+  // Tailscale auth key is intentionally NOT included here.
+  // Each user must provide their own key for network isolation — see toggleFunnel().
   return env;
 }
 
@@ -45,6 +46,10 @@ export interface Deployment {
   funnel_url?: string;
   gateway_token?: string;
   tailscale_configured: boolean;
+  tailscale_device_id?: string;
+  tailscale_hostname?: string;
+  tailscale_managed: boolean;
+  tailscale_setup_status: 'pending' | 'in_progress' | 'configured' | 'failed';
   current_step: number;
   total_steps: number;
   step_label?: string;
@@ -138,6 +143,8 @@ export const createDeployment = createServerFn({ method: 'POST' })
     }
 
     const platformModel = process.env.PLATFORM_DEFAULT_MODEL || null;
+    const { isPlatformTailscaleEnabled } = await import('./tailscale-api');
+    const platformTailscale = isPlatformTailscaleEnabled();
 
     // Insert deployment row (unique constraint prevents double-submit)
     const { data: deployment, error: insertError } = await supabase
@@ -150,6 +157,7 @@ export const createDeployment = createServerFn({ method: 'POST' })
         region,
         size,
         primary_model: platformModel,
+        tailscale_managed: platformTailscale,
         persona_slug: personaSlug ?? null,
         persona_name: personaName ?? null,
         template_id: resolvedTemplateId ?? null,
@@ -217,13 +225,49 @@ export const createDeployment = createServerFn({ method: 'POST' })
       const hostnameMatch = result.stdout.match(/Hostname:\s+(\S+)/);
       const deployIdMatch = result.stdout.match(/Deploy ID:\s+(\S+)/);
 
+      const restoreHostname = hostnameMatch?.[1] ?? null;
+      const restoreIp = ipMatch?.[1] ?? null;
       await supabase.from('deployments').update({
         status: 'running',
-        ip_address: ipMatch?.[1] ?? null,
-        droplet_hostname: hostnameMatch?.[1] ?? null,
+        ip_address: restoreIp,
+        droplet_hostname: restoreHostname,
         cli_deploy_id: deployIdMatch?.[1] ?? null,
         sandbox_dir: result.sandboxDir,
+        ...(platformTailscale && restoreHostname ? { tailscale_hostname: restoreHostname } : {}),
       }).eq('id', deployment.id);
+
+      // Auto-enable Funnel for platform-managed sync restores (do-restore path)
+      if (platformTailscale && restoreIp) {
+        // Fire-and-forget: don't block the deploy response. Poll will pick up status.
+        const cliEnv = buildCliBaseEnv();
+        supabase.from('deployments')
+          .update({ tailscale_setup_status: 'in_progress' }, { count: 'exact' })
+          .eq('id', deployment.id)
+          .eq('tailscale_setup_status', 'pending')
+          .then(async ({ count: claimed }) => {
+            if (!claimed || claimed === 0) return;
+            try {
+              const funnelResult = await executeFunnelSetup({
+                ipAddress: restoreIp,
+                sandboxDir: result.sandboxDir,
+                cliEnv,
+                tailscaleHostname: restoreHostname ?? undefined,
+              });
+              const funnelUpdates: Record<string, unknown> = {
+                tailscale_setup_status: 'configured',
+                tailscale_configured: true,
+              };
+              if (funnelResult.funnelUrl) funnelUpdates.funnel_url = funnelResult.funnelUrl;
+              if (funnelResult.gatewayToken) funnelUpdates.gateway_token = funnelResult.gatewayToken;
+              if (funnelResult.deviceId) funnelUpdates.tailscale_device_id = funnelResult.deviceId;
+              await supabase.from('deployments').update(funnelUpdates).eq('id', deployment.id);
+            } catch (err) {
+              console.error('[createDeployment] Sync restore auto-funnel failed:', err);
+              await supabase.from('deployments').update({ tailscale_setup_status: 'failed' }).eq('id', deployment.id);
+            }
+          })
+          .then(() => {}, (err: unknown) => console.error('[createDeployment] Funnel claim failed:', err));
+      }
     } else {
       // Fresh deploy via clawmacdo CLI
       const { execClawmacdo } = await import('./clawmacdo');
@@ -235,7 +279,7 @@ export const createDeployment = createServerFn({ method: 'POST' })
         '--customer-email', user.email,
         '--region', region,
         '--size', size,
-        '--hostname', name,
+        '--hostname', `${name}-${deployment.id.slice(0, 8)}`,
         '--detach',
         '--json',
       ];
@@ -245,6 +289,25 @@ export const createDeployment = createServerFn({ method: 'POST' })
 
       const userKeys = await getDecryptedUserApiKeys(user.id, supabase);
       const cliEnv = buildCliBaseEnv();
+
+      // Platform-managed Tailscale: auto-generate auth key and add --tailscale flags
+      if (platformTailscale) {
+        try {
+          const { createTenantAuthKey } = await import('./tailscale-api');
+          const tsAuthKey = await createTenantAuthKey(deployment.id);
+          cliArgs.push('--tailscale', '--tailscale-auth-key', tsAuthKey);
+        } catch (tsErr) {
+          await supabase.from('deployments').update({
+            status: 'failed',
+            error_message: `Tailscale key generation failed: ${String(tsErr)}`,
+          }).eq('id', deployment.id);
+          throw new Error(`Tailscale key generation failed: ${String(tsErr)}`);
+        }
+      } else if (userKeys.tailscaleKey) {
+        // User-managed Tailscale: use user's own auth key
+        cliArgs.push('--tailscale', '--tailscale-auth-key', userKeys.tailscaleKey);
+        cliEnv['TAILSCALE_AUTH_KEY'] = userKeys.tailscaleKey;
+      }
       if (userKeys.anthropicKey) cliEnv['ANTHROPIC_API_KEY'] = userKeys.anthropicKey;
       if (userKeys.openaiKey) cliEnv['OPENAI_API_KEY'] = userKeys.openaiKey;
       if (userKeys.geminiKey) cliEnv['GEMINI_API_KEY'] = userKeys.geminiKey;
@@ -284,15 +347,54 @@ export const createDeployment = createServerFn({ method: 'POST' })
         throw new Error(result.stderr || 'Deploy command failed');
       }
 
+      const deployHostname = `${name}-${deployment.id.slice(0, 8)}`;
       await supabase.from('deployments').update({
         status: 'provisioning',
         cli_deploy_id: cliDeployId ?? null,
         sandbox_dir: result.sandboxDir,
+        // Store the hostname used in --hostname flag so snapshot/destroy can resolve the droplet
+        droplet_hostname: deployHostname,
+        ...(platformTailscale ? { tailscale_hostname: deployHostname } : {}),
       }).eq('id', deployment.id);
     }
 
     return { deploymentId: deployment.id };
   });
+
+/** Attempt auto-funnel setup for a running deployment that still needs it.
+ *  Uses compare-and-swap to prevent concurrent attempts. */
+async function attemptAutoFunnel(
+  dep: Deployment, targetIp: string, supabase: SupabaseClient
+): Promise<Deployment> {
+  const { count: funnelClaim } = await supabase
+    .from('deployments')
+    .update({ tailscale_setup_status: 'in_progress' }, { count: 'exact' })
+    .eq('id', dep.id)
+    .eq('tailscale_setup_status', 'pending');
+
+  if (!funnelClaim || funnelClaim === 0) return dep;
+
+  const updates: Partial<Deployment> = {};
+  const cliEnv = buildCliBaseEnv();
+  try {
+    const funnelResult = await executeFunnelSetup({
+      ipAddress: targetIp,
+      sandboxDir: dep.sandbox_dir ?? undefined,
+      cliEnv,
+      tailscaleHostname: dep.tailscale_hostname ?? dep.droplet_hostname ?? undefined,
+    });
+    updates.tailscale_setup_status = 'configured';
+    updates.tailscale_configured = true;
+    if (funnelResult.funnelUrl) updates.funnel_url = funnelResult.funnelUrl;
+    if (funnelResult.gatewayToken) updates.gateway_token = funnelResult.gatewayToken;
+    if (funnelResult.deviceId) updates.tailscale_device_id = funnelResult.deviceId;
+  } catch (err) {
+    console.error('[attemptAutoFunnel] Failed:', err);
+    updates.tailscale_setup_status = 'failed';
+  }
+  await supabase.from('deployments').update(updates).eq('id', dep.id);
+  return { ...dep, ...updates };
+}
 
 /** Poll deployment status via clawmacdo track */
 export const pollDeploymentStatus = createServerFn({ method: 'POST' })
@@ -313,8 +415,10 @@ export const pollDeploymentStatus = createServerFn({ method: 'POST' })
 
     const dep = deployment as Deployment;
 
-    // If already terminal, return as-is
-    if (TERMINAL_STATUSES.has(dep.status)) {
+    // If already terminal and no pending funnel setup, return as-is
+    const needsFunnelSetup = dep.tailscale_managed &&
+      (dep.tailscale_setup_status === 'pending' || dep.tailscale_setup_status === 'in_progress');
+    if (TERMINAL_STATUSES.has(dep.status) && !needsFunnelSetup) {
       return dep;
     }
 
@@ -336,6 +440,10 @@ export const pollDeploymentStatus = createServerFn({ method: 'POST' })
 
     // No cli_deploy_id yet — can't track
     if (!dep.cli_deploy_id) {
+      // If already running but needs funnel setup, attempt it directly
+      if (dep.status === 'running' && needsFunnelSetup && dep.ip_address) {
+        return await attemptAutoFunnel(dep, dep.ip_address, supabase);
+      }
       return dep;
     }
 
@@ -403,6 +511,40 @@ export const pollDeploymentStatus = createServerFn({ method: 'POST' })
         }
       }
       // count === 0 means another poll already claimed it — skip
+    }
+
+    // Auto-enable Funnel for platform-managed deployments reaching running state
+    if (normalizedStatus === 'running' && dep.tailscale_managed && dep.tailscale_setup_status === 'pending') {
+      const { count: funnelClaim } = await supabase
+        .from('deployments')
+        .update({ tailscale_setup_status: 'in_progress' }, { count: 'exact' })
+        .eq('id', dep.id)
+        .eq('tailscale_setup_status', 'pending');
+
+      if (funnelClaim && funnelClaim > 0) {
+        try {
+          const targetIp = ipAddress ?? dep.ip_address;
+          if (targetIp) {
+            const funnelResult = await executeFunnelSetup({
+              ipAddress: targetIp,
+              sandboxDir: dep.sandbox_dir ?? undefined,
+              cliEnv,
+              tailscaleHostname: dep.tailscale_hostname ?? dep.droplet_hostname ?? undefined,
+            });
+            updates.tailscale_setup_status = 'configured';
+            updates.tailscale_configured = true;
+            if (funnelResult.funnelUrl) updates.funnel_url = funnelResult.funnelUrl;
+            if (funnelResult.gatewayToken) updates.gateway_token = funnelResult.gatewayToken;
+            if (funnelResult.deviceId) updates.tailscale_device_id = funnelResult.deviceId;
+          } else {
+            // No IP available yet — roll back claim so next poll can retry
+            updates.tailscale_setup_status = 'pending';
+          }
+        } catch (err) {
+          console.error('[pollDeploymentStatus] Auto-funnel failed:', err);
+          updates.tailscale_setup_status = 'failed';
+        }
+      }
     }
 
     await supabase.from('deployments').update(updates).eq('id', dep.id);
@@ -529,6 +671,17 @@ export const destroyDeployment = createServerFn({ method: 'POST' })
       }
     }
 
+    // Remove device from platform tailnet
+    if (dep.tailscale_managed && dep.tailscale_device_id) {
+      try {
+        const { deleteDevice } = await import('./tailscale-api');
+        await deleteDevice(dep.tailscale_device_id);
+      } catch (err) {
+        console.warn('[destroyDeployment] Failed to remove Tailscale device:', err);
+        // Non-critical: device will become orphaned but won't cause issues
+      }
+    }
+
     // Clean up sandbox dir
     if (dep.sandbox_dir) {
       try {
@@ -542,6 +695,84 @@ export const destroyDeployment = createServerFn({ method: 'POST' })
     await supabase.from('deployments').update({ status: 'destroyed', error_message: null }).eq('id', dep.id);
     return { success: true };
   });
+
+/** Shared helper: run tailscale-funnel CLI and parse output. Used by toggleFunnel and auto-funnel triggers. */
+async function executeFunnelSetup(opts: {
+  ipAddress: string;
+  sandboxDir?: string;
+  cliEnv: Record<string, string>;
+  tailscaleHostname?: string;
+}): Promise<{ funnelUrl?: string; gatewayToken?: string; deviceId?: string }> {
+  const { execClawmacdo } = await import('./clawmacdo');
+  const { createTenantAuthKey, findDeviceByHostname } = await import('./tailscale-api');
+
+  // Generate a fresh auth key (safe even if device is already connected — clawmacdo skips connect step)
+  const tsKey = await createTenantAuthKey('platform-funnel-setup');
+  const env = { ...opts.cliEnv, TAILSCALE_AUTH_KEY: tsKey };
+
+  // Retry with backoff: newly provisioned droplets need time for SSH to become available.
+  // DigitalOcean assigns the IP before sshd starts (~30-90s after creation).
+  const MAX_RETRIES = 5;
+  const BASE_DELAY_MS = 10_000; // 10s, 20s, 40s, 80s, 160s
+  let lastResult;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1);
+      console.log(`[executeFunnelSetup] SSH not ready, retrying in ${delay / 1000}s (attempt ${attempt + 1}/${MAX_RETRIES + 1})`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+
+    lastResult = await execClawmacdo(
+      ['tailscale-funnel', '--instance', opts.ipAddress],
+      { sandboxDir: opts.sandboxDir, env, timeoutMs: 5 * 60_000 },
+    );
+
+    if (lastResult.code === 0) break;
+
+    // Only retry on SSH connection errors (newly provisioned droplet not ready yet)
+    const isConnectionRefused = /Connection refused|Connection reset|No route to host|timed out/i.test(
+      lastResult.stderr,
+    );
+    if (!isConnectionRefused) break; // Non-SSH error — don't retry
+  }
+
+  const result = lastResult!;
+  if (result.code !== 0) {
+    throw new Error(result.stderr || 'Tailscale Funnel setup failed');
+  }
+
+  // Parse Funnel URL
+  let funnelUrl: string | undefined;
+  const urlMatch = result.stdout.match(/Public URL:\s+(https:\/\/\S+)/);
+  if (urlMatch) funnelUrl = urlMatch[1];
+  if (!funnelUrl) {
+    const tsMatch = result.stdout.match(/(https:\/\/\S+\.ts\.net)/);
+    if (tsMatch) funnelUrl = tsMatch[1];
+  }
+
+  // Parse gateway token
+  let gatewayToken: string | undefined;
+  const tokenMatch = result.stdout.match(/Gateway Token:\s+(\S+)/);
+  if (tokenMatch) gatewayToken = tokenMatch[1];
+
+  if (!funnelUrl) {
+    throw new Error('Tailscale Funnel setup succeeded (exit 0) but no public URL found in output');
+  }
+
+  // Discover device ID for lifecycle management
+  let deviceId: string | undefined;
+  if (opts.tailscaleHostname) {
+    try {
+      const device = await findDeviceByHostname(opts.tailscaleHostname);
+      if (device) deviceId = device.id;
+    } catch {
+      // Non-critical: device ID discovery failure doesn't block funnel setup
+    }
+  }
+
+  return { funnelUrl, gatewayToken, deviceId };
+}
 
 /** Toggle Tailscale Funnel on or off for a running deployment */
 export const toggleFunnel = createServerFn({ method: 'POST' })
@@ -577,20 +808,47 @@ export const toggleFunnel = createServerFn({ method: 'POST' })
 
     const cliEnv = buildCliBaseEnv();
 
-    // Resolve Tailscale auth key: user's encrypted key takes priority over platform default
-    if (ctx.data.action === 'on' && !dep.tailscale_configured) {
-      const { getDecryptedUserApiKeys } = await import('./settings');
-      const userKeys = await getDecryptedUserApiKeys(user.id, supabase);
-      if (userKeys.tailscaleKey) {
+    if (ctx.data.action === 'on') {
+      if (dep.tailscale_managed) {
+        // Platform-managed: use executeFunnelSetup helper (generates its own key)
+      } else {
+        // User-managed: require user's own auth key
+        const { getDecryptedUserApiKeys } = await import('./settings');
+        const userKeys = await getDecryptedUserApiKeys(user.id, supabase);
+        if (!userKeys.tailscaleKey) {
+          throw new Error('No Tailscale auth key found. Add one in Settings before enabling Funnel.');
+        }
         cliEnv['TAILSCALE_AUTH_KEY'] = userKeys.tailscaleKey;
-      }
-      if (!cliEnv['TAILSCALE_AUTH_KEY']) {
-        throw new Error('No Tailscale auth key found. Add one in Settings, or contact your administrator.');
       }
     }
 
     if (ctx.data.action === 'on') {
-      // First time: run tailscale-funnel to install + connect + enable
+      // Platform-managed first-time setup or retry from failed
+      if (dep.tailscale_managed && (!dep.tailscale_configured || dep.tailscale_setup_status === 'failed')) {
+        await supabase.from('deployments').update({ tailscale_setup_status: 'in_progress' }).eq('id', dep.id);
+        try {
+          const funnelResult = await executeFunnelSetup({
+            ipAddress,
+            sandboxDir: dep.sandbox_dir ?? undefined,
+            cliEnv,
+            tailscaleHostname: dep.tailscale_hostname ?? dep.droplet_hostname ?? undefined,
+          });
+          const funnelUpdates: Record<string, unknown> = {
+            tailscale_configured: true,
+            tailscale_setup_status: 'configured',
+            funnel_url: funnelResult.funnelUrl ?? null,
+            gateway_token: funnelResult.gatewayToken ?? null,
+          };
+          if (funnelResult.deviceId) funnelUpdates.tailscale_device_id = funnelResult.deviceId;
+          await supabase.from('deployments').update(funnelUpdates).eq('id', dep.id);
+          return { funnelUrl: funnelResult.funnelUrl, gatewayToken: funnelResult.gatewayToken };
+        } catch (err) {
+          await supabase.from('deployments').update({ tailscale_setup_status: 'failed' }).eq('id', dep.id);
+          throw err;
+        }
+      }
+
+      // User-managed first-time setup
       if (!dep.tailscale_configured) {
 
         const setupResult = await execClawmacdo(
@@ -630,6 +888,12 @@ export const toggleFunnel = createServerFn({ method: 'POST' })
       }
 
       // Already configured: just turn funnel on
+      // Platform-managed re-enable needs a fresh auth key in case the device lost its session
+      if (dep.tailscale_managed) {
+        const { createTenantAuthKey } = await import('./tailscale-api');
+        const tsKey = await createTenantAuthKey(dep.id);
+        cliEnv['TAILSCALE_AUTH_KEY'] = tsKey;
+      }
       const result = await execClawmacdo(
         ['funnel-on', '--instance', ipAddress],
         { sandboxDir: dep.sandbox_dir ?? undefined, env: cliEnv, timeoutMs: 2 * 60_000 },
@@ -672,18 +936,14 @@ export const toggleFunnel = createServerFn({ method: 'POST' })
     }
   });
 
-/** Check whether Tailscale is available via platform env var (pure function for testability) */
-export function checkTailscaleAvailable(): { available: boolean } {
-  return { available: !!process.env.TAILSCALE_AUTH_KEY };
-}
-
-/** Check if Tailscale Funnel is available for the current user (user key OR platform key) */
+/** Check if Tailscale Funnel is available — platform mode or user key. */
 export const isTailscaleAvailable = createServerFn({ method: 'GET' }).handler(async () => {
-  // Platform key is always available if set
-  if (process.env.TAILSCALE_AUTH_KEY) {
-    return { available: true };
-  }
-  // Check user's encrypted key
+  const { isPlatformTailscaleEnabled } = await import('./tailscale-api');
+  const platformEnabled = isPlatformTailscaleEnabled();
+
+  // Always check user key availability — legacy deployments (tailscale_managed=false)
+  // need the user's own key even when platform Tailscale is enabled
+  let userKeyAvailable = false;
   try {
     const { supabase, user } = await getAuthenticatedClient();
     const { data } = await supabase
@@ -691,10 +951,15 @@ export const isTailscaleAvailable = createServerFn({ method: 'GET' }).handler(as
       .select('tailscale_key_encrypted')
       .eq('user_id', user.id)
       .maybeSingle();
-    return { available: !!data?.tailscale_key_encrypted };
+    userKeyAvailable = !!data?.tailscale_key_encrypted;
   } catch {
-    return { available: false };
+    // Non-critical
   }
+
+  if (platformEnabled) {
+    return { available: true, mode: 'platform' as const, userKeyAvailable };
+  }
+  return { available: userKeyAvailable, mode: 'user' as const, userKeyAvailable };
 });
 
 /** Resolve a DigitalOcean droplet by hostname/name — returns both ID and IP. */
@@ -827,6 +1092,7 @@ export const startRestoreFromSnapshot = createServerFn({ method: 'POST' })
     }
 
     // Create deployment row BEFORE proxying to sidecar
+    const { isPlatformTailscaleEnabled: checkPlatformTs } = await import('./tailscale-api');
     const { data: deployment, error: insertError } = await supabase
       .from('deployments')
       .insert({
@@ -838,6 +1104,7 @@ export const startRestoreFromSnapshot = createServerFn({ method: 'POST' })
         size,
         primary_model: process.env.PLATFORM_DEFAULT_MODEL || null,
         template_id: matchingTemplate.id,
+        tailscale_managed: checkPlatformTs(),
       })
       .select()
       .single();
@@ -933,9 +1200,73 @@ export const updateDeploymentAfterRestore = createServerFn({ method: 'POST' })
     if (ip) updates.ip_address = ip;
     if (deployId) updates.cli_deploy_id = deployId;
 
+    // Store tailscale_hostname for platform-managed restores
+    const { data: dep } = await supabase
+      .from('deployments')
+      .select('tailscale_managed, tailscale_setup_status, sandbox_dir')
+      .eq('id', deploymentId)
+      .eq('user_id', user.id)
+      .maybeSingle();
+
+    if (dep?.tailscale_managed && hostname) {
+      updates.tailscale_hostname = hostname;
+    }
+
     await supabase.from('deployments').update(updates)
       .eq('id', deploymentId)
       .eq('user_id', user.id);
+
+    // Auto-enable Funnel for platform-managed snapshot restores
+    if (dep?.tailscale_managed && dep.tailscale_setup_status === 'pending' && ip) {
+      const { count: funnelClaim } = await supabase
+        .from('deployments')
+        .update({ tailscale_setup_status: 'in_progress' }, { count: 'exact' })
+        .eq('id', deploymentId)
+        .eq('tailscale_setup_status', 'pending');
+
+      if (funnelClaim && funnelClaim > 0) {
+        try {
+          const cliEnv = buildCliBaseEnv();
+          const funnelResult = await executeFunnelSetup({
+            ipAddress: ip,
+            sandboxDir: dep.sandbox_dir ?? undefined,
+            cliEnv,
+            tailscaleHostname: hostname ?? undefined,
+          });
+          const funnelUpdates: Record<string, unknown> = {
+            tailscale_setup_status: 'configured',
+            tailscale_configured: true,
+          };
+          if (funnelResult.funnelUrl) funnelUpdates.funnel_url = funnelResult.funnelUrl;
+          if (funnelResult.gatewayToken) funnelUpdates.gateway_token = funnelResult.gatewayToken;
+          if (funnelResult.deviceId) funnelUpdates.tailscale_device_id = funnelResult.deviceId;
+          await supabase.from('deployments').update(funnelUpdates).eq('id', deploymentId);
+        } catch (err) {
+          console.error('[updateDeploymentAfterRestore] Auto-funnel failed:', err);
+          await supabase.from('deployments').update({ tailscale_setup_status: 'failed' }).eq('id', deploymentId);
+        }
+      }
+    }
+
+    return { success: true };
+  });
+
+/** Clear the active_operation_id lock after a snapshot completes or fails.
+ *  Uses compare-and-swap: only clears if the current lock matches the given operationId. */
+export const clearActiveOperation = createServerFn({ method: 'POST' })
+  .inputValidator((data: { deploymentId: string; operationId?: string }) => data)
+  .handler(async (ctx) => {
+    const { supabase, user } = await getAuthenticatedClient();
+    const { deploymentId, operationId } = ctx.data;
+
+    let query = supabase.from('deployments').update({ active_operation_id: null })
+      .eq('id', deploymentId)
+      .eq('user_id', user.id);
+    if (operationId) {
+      query = query.eq('active_operation_id', operationId);
+    }
+
+    await query;
 
     return { success: true };
   });

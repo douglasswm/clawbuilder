@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { useState, useEffect } from 'react';
 import { getUserApiKeys, saveUserApiKeys, type UserApiKeysMasked } from '../../lib/server/settings';
+import { isTailscaleAvailable } from '../../lib/server/deployments';
 import { Input } from '@workspace/ui/components/input';
 import { Label } from '@workspace/ui/components/label';
 import { Button } from '@workspace/ui/components/button';
@@ -25,7 +26,9 @@ function SettingsPage() {
   const [geminiKey, setGeminiKey] = useState('');
   const [tailscaleKey, setTailscaleKey] = useState('');
   const [saving, setSaving] = useState(false);
+  const [removing, setRemoving] = useState<string | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [tailscaleMode, setTailscaleMode] = useState<'platform' | 'user' | null>(null);
 
   useEffect(() => {
     getUserApiKeys()
@@ -34,6 +37,9 @@ function SettingsPage() {
         console.error(err);
         setLoadError(err instanceof Error ? err.message : 'Failed to load API keys.');
       });
+    isTailscaleAvailable()
+      .then((res) => setTailscaleMode(res.mode))
+      .catch(() => setTailscaleMode('user'));
   }, []);
 
   const handleSave = async (e: React.FormEvent) => {
@@ -64,6 +70,21 @@ function SettingsPage() {
       });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleRemoveKey = async (keyName: 'anthropicKey' | 'openaiKey' | 'geminiKey' | 'tailscaleKey') => {
+    setRemoving(keyName);
+    setMessage(null);
+    try {
+      await saveUserApiKeys({ data: { [keyName]: '' } });
+      const updated = await getUserApiKeys();
+      setKeys(updated);
+      setMessage({ type: 'success', text: 'Key removed.' });
+    } catch (err) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to remove key.' });
+    } finally {
+      setRemoving(null);
     }
   };
 
@@ -98,7 +119,12 @@ function SettingsPage() {
                 autoComplete="off"
               />
               {keys?.hasAnthropicKey && !anthropicKey && (
-                <p className="text-xs text-muted-foreground">Key saved: {keys.anthropicKeyMasked}</p>
+                <div className="flex items-center gap-2">
+                  <p className="text-xs text-muted-foreground">Key saved: {keys.anthropicKeyMasked}</p>
+                  <Button type="button" variant="ghost" size="sm" className="h-5 px-1 text-xs text-red-600 hover:text-red-700" onClick={() => handleRemoveKey('anthropicKey')} disabled={removing === 'anthropicKey'}>
+                    {removing === 'anthropicKey' ? 'Removing...' : 'Remove'}
+                  </Button>
+                </div>
               )}
             </div>
 
@@ -113,7 +139,12 @@ function SettingsPage() {
                 autoComplete="off"
               />
               {keys?.hasOpenaiKey && !openaiKey && (
-                <p className="text-xs text-muted-foreground">Key saved: {keys.openaiKeyMasked}</p>
+                <div className="flex items-center gap-2">
+                  <p className="text-xs text-muted-foreground">Key saved: {keys.openaiKeyMasked}</p>
+                  <Button type="button" variant="ghost" size="sm" className="h-5 px-1 text-xs text-red-600 hover:text-red-700" onClick={() => handleRemoveKey('openaiKey')} disabled={removing === 'openaiKey'}>
+                    {removing === 'openaiKey' ? 'Removing...' : 'Remove'}
+                  </Button>
+                </div>
               )}
             </div>
 
@@ -128,7 +159,12 @@ function SettingsPage() {
                 autoComplete="off"
               />
               {keys?.hasGeminiKey && !geminiKey && (
-                <p className="text-xs text-muted-foreground">Key saved: {keys.geminiKeyMasked}</p>
+                <div className="flex items-center gap-2">
+                  <p className="text-xs text-muted-foreground">Key saved: {keys.geminiKeyMasked}</p>
+                  <Button type="button" variant="ghost" size="sm" className="h-5 px-1 text-xs text-red-600 hover:text-red-700" onClick={() => handleRemoveKey('geminiKey')} disabled={removing === 'geminiKey'}>
+                    {removing === 'geminiKey' ? 'Removing...' : 'Remove'}
+                  </Button>
+                </div>
               )}
             </div>
 
@@ -141,7 +177,17 @@ function SettingsPage() {
             )}
 
             <div className="space-y-2 pt-4 border-t">
-              <Label htmlFor="tailscale">Tailscale Auth Key</Label>
+              {tailscaleMode === 'platform' && (
+                <p className="text-sm text-muted-foreground mb-2">
+                  New deployments use platform-managed Tailscale automatically.
+                </p>
+              )}
+              <Label htmlFor="tailscale">
+                Tailscale Auth Key
+                {tailscaleMode === 'platform' && (
+                  <span className="text-xs text-muted-foreground font-normal ml-1">(legacy deployments only)</span>
+                )}
+              </Label>
               <Input
                 id="tailscale"
                 type="password"
@@ -151,11 +197,18 @@ function SettingsPage() {
                 autoComplete="off"
               />
               {keys?.hasTailscaleKey && !tailscaleKey && (
-                <p className="text-xs text-muted-foreground">Key saved: {keys.tailscaleKeyMasked}</p>
+                <div className="flex items-center gap-2">
+                  <p className="text-xs text-muted-foreground">Key saved: {keys.tailscaleKeyMasked}</p>
+                  <Button type="button" variant="ghost" size="sm" className="h-5 px-1 text-xs text-red-600 hover:text-red-700" onClick={() => handleRemoveKey('tailscaleKey')} disabled={removing === 'tailscaleKey'}>
+                    {removing === 'tailscaleKey' ? 'Removing...' : 'Remove'}
+                  </Button>
+                </div>
               )}
-              <p className="text-xs text-muted-foreground">
-                Required for Tailscale Funnel. Each user needs their own key for network isolation.
-              </p>
+              {tailscaleMode !== 'platform' && (
+                <p className="text-xs text-muted-foreground">
+                  Required for Tailscale Funnel. Each user needs their own key for network isolation.
+                </p>
+              )}
             </div>
 
             <Button

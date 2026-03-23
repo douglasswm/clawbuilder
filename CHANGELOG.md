@@ -2,6 +2,71 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.6.0] - 2026-03-23
+
+### Added
+- Gateway token display with copy button on deployment detail page — users can copy-paste the token into the OpenClaw dashboard instead of relying on broken `auth.html` redirect
+- API key removal buttons on Settings page — each saved key now has a "Remove" action
+- `attemptAutoFunnel()` helper for running deployments that missed initial funnel setup
+
+### Fixed
+- `clearActiveOperation` query was built but never awaited — operation locks were never actually cleared by the frontend
+- Tailscale auth key leaked in CLI args via `clawmacdo` wrapper's verbatim argv logging — now redacted
+- SSE lock cleared on client disconnect even when sidecar job still running — now only clears on normal stream completion
+- `droplet_hostname` not set for fresh platform-managed deploys — snapshot/destroy lookups by name would fail
+- Auto-funnel stuck permanently for deployments reaching `running` without IP — poll now continues for pending funnel setup
+- `isTailscaleAvailable` returned platform availability for legacy user-managed deployments — now returns `userKeyAvailable` field
+- Funnel retry success didn't update `tailscale_setup_status` locally — UI showed stale "failed" state until page reload
+- Polling continued indefinitely for running deployments with in-progress funnel setup
+
+## [0.2.5.1] - 2026-03-23
+
+### Fixed
+- `clearActiveOperation` now uses compare-and-swap to prevent stale tabs from clearing a newer operation's lock
+- Tailscale hostname includes deployment UUID prefix to prevent cross-tenant device collisions
+- `executeFunnelSetup` throws if CLI exits 0 but no funnel URL is parsed (prevents zombie configured state)
+- Platform-managed funnel re-enable now injects fresh auth key (prevents failure after device session loss)
+- Tailscale API calls have 30-second timeout via `AbortSignal.timeout()` (prevents indefinite hangs)
+- Migration backfill guarded with `AND tailscale_managed = true` to avoid misleading status on user-managed rows
+- Poll dedupe now compares `tailscale_setup_status` and `funnel_url` (fixes stale UI after auto-funnel completes)
+- User-managed fresh deploys now pass `--tailscale` flags to CLI when user has a stored auth key
+- `.env.example` updated: removed stale `TAILSCALE_AUTH_KEY`, added `PLATFORM_DEFAULT_MODEL` and `BYTEPLUS_ARKMODEL_API_KEY`
+- `deleteDevice` no longer sends `Content-Type: application/json` on bodyless DELETE request
+- Tailnet and device ID values URI-encoded in Tailscale API URL paths
+
+## [0.2.5.0] - 2026-03-23
+
+### Added
+- **Platform-managed Tailscale** — platform auto-generates single-use auth keys via Tailscale REST API so users get a live HTTPS Funnel URL without any Tailscale awareness
+- `tailscale-api.ts` module: `isPlatformTailscaleEnabled()`, `createTenantAuthKey()`, `deleteDevice()`, `findDeviceByHostname()` wrapping `api.tailscale.com/api/v2`
+- Tailscale setup state machine (`tailscale_setup_status`: pending → in_progress → configured | failed) replacing overloaded `tailscale_configured` boolean for platform-managed deployments
+- Auto-funnel triggers in `pollDeploymentStatus()`, `updateDeploymentAfterRestore()`, and sync restore path — all use atomic claim pattern to prevent duplicate setups
+- `executeFunnelSetup()` shared helper extracted from `toggleFunnel()` — DRY across manual toggle, auto-funnel in poll, and auto-funnel in restore
+- Tailscale device cleanup in `destroyDeployment()` via `deleteDevice()` API call
+- Dual-mode `isTailscaleAvailable()` returns `{ available, mode }` for frontend conditional rendering
+- Dual-mode `toggleFunnel()` uses platform key (via `createTenantAuthKey()`) or user key based on `tailscale_managed` flag, with retry from `failed` state
+- Settings page: platform mode info message + legacy key input for user-managed deployments
+- Deployment detail page: state machine Funnel card UI (pending spinner, in_progress progress bar, configured URL display, failed retry button)
+- Database migration: `tailscale_device_id`, `tailscale_hostname`, `tailscale_managed`, `tailscale_setup_status` columns on deployments table
+- 18 new unit tests (13 for tailscale-api module, 5 for platform mode integration)
+- 3 new TODOs: HOME directory unification, API token rotation automation, orphan device cleanup
+
+### Next Steps (manual)
+- Create a platform Tailscale account at https://login.tailscale.com/start (Free plan is sufficient)
+- Generate an API access token (Settings → Keys, all scopes, 90-day expiry)
+- Enable MagicDNS and HTTPS Certificates in Tailscale DNS settings
+- Deploy ACL policy from `docs/tailscale-migration.md` Section 3 into Access Controls tab
+- Test ACL isolation: deploy 2 dummy `tag:tenant` nodes, verify they can't reach each other
+- Set env vars: `TAILSCALE_API_TOKEN` and `TAILSCALE_TAILNET`
+- Set a 90-day calendar reminder for API token rotation
+- Run database migration: `20260323002000_platform_tailscale.sql`
+
+### Fixed
+- Auto-funnel rolls back to `pending` when IP address is not yet available (prevents stuck `in_progress` state)
+- `createTenantAuthKey()` failure during deploy now marks deployment as `failed` instead of leaving it in `pending`
+- `startRestoreFromSnapshot()` now sets `tailscale_managed` flag so Restore page deployments participate in platform mode
+- Fresh deploy path stores `tailscale_hostname` from `--hostname` flag so device discovery works for destroy cleanup
+
 ## [0.2.4.0] - 2026-03-22
 
 ### Added
