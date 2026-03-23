@@ -705,7 +705,12 @@ function DeploymentDetailPage() {
               disabled={destroying}
               className="bg-red-600 hover:bg-red-700 text-white"
             >
-              {destroying ? 'Destroying...' : 'Destroy'}
+              {destroying ? (
+                <span className="flex items-center gap-2">
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                  Destroying...
+                </span>
+              ) : 'Destroy'}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -254,8 +254,18 @@ function DeployPage() {
         className="w-full"
         size="lg"
       >
-        {deploying ? 'Deploying...' : 'Deploy Agent'}
+        {deploying ? (
+          <span className="flex items-center justify-center gap-2">
+            <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+            Deploying...
+          </span>
+        ) : 'Deploy Agent'}
       </Button>
+      {deploying && (
+        <p className="text-center text-sm text-muted-foreground animate-pulse">
+          Setting up your agent. You'll be redirected once provisioning starts...
+        </p>
+      )}
     </div>
   );
 }
