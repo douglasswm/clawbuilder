@@ -6,6 +6,15 @@ import { createRequire } from 'node:module';
 const TIMEOUT_MS = 30_000;
 export const RESTORE_TIMEOUT_MS = 10 * 60_000; // 10 minutes for snapshot restores
 
+const REDACT_FLAGS = new Set(['--tailscale-auth-key', '--bot-token', '--byteplus-ark-api-key']);
+
+/** Redact sensitive CLI flag values for logging. Exported for testing. */
+export function redactArgs(args: string[]): string {
+  return args.map((a, i) =>
+    REDACT_FLAGS.has(args[i - 1]) ? '[REDACTED]' : a
+  ).join(' ');
+}
+
 export interface CliResult {
   stdout: string;
   stderr: string;
@@ -65,10 +74,7 @@ export function execClawmacdo(args: string[], options: ExecOptions = {}): Promis
     };
 
     const startMs = Date.now();
-    const logArgs = args.map((a, i) =>
-      args[i - 1] === '--tailscale-auth-key' ? '[REDACTED]' : a
-    ).join(' ');
-    console.log(`[clawmacdo] Spawning: clawmacdo ${logArgs}`);
+    console.log(`[clawmacdo] Spawning: clawmacdo ${redactArgs(args)}`);
 
     const proc = spawn(binaryPath, args, {
       env,

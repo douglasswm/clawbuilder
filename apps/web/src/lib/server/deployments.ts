@@ -1,7 +1,7 @@
 import { createServerFn } from '@tanstack/react-start';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getAuthenticatedClient } from './auth-helpers';
-import { validateDeploymentName, validateRegion, validateSize, validateProvider, PROVIDER_LABELS } from '../validation';
+import { validateDeploymentName, validateRegion, validateSize, validateProvider, PROVIDER_LABELS, toCliModel } from '../validation';
 
 export const TERMINAL_STATUSES = new Set<Deployment['status']>(['running', 'failed', 'destroyed']);
 
@@ -10,7 +10,7 @@ export function buildCliBaseEnv(): Record<string, string> {
   const doToken = process.env.DO_TOKEN;
   if (doToken) env['DO_TOKEN'] = doToken;
   const byteplusKey = process.env.BYTEPLUS_ARKMODEL_API_KEY;
-  if (byteplusKey) env['BYTEPLUS_ARKMODEL_API_KEY'] = byteplusKey;
+  if (byteplusKey) env['BYTEPLUS_ARK_API_KEY'] = byteplusKey;
   // Tailscale auth key is intentionally NOT included here.
   // Each user must provide their own key for network isolation — see toggleFunnel().
   return env;
@@ -58,6 +58,9 @@ export interface Deployment {
   active_operation_id?: string;
   last_operation_id?: string;
   template_id?: string;
+  telegram_status?: 'setting_up' | 'awaiting_pairing' | 'pairing' | 'paired' | 'failed' | null;
+  telegram_bot_username?: string | null;
+  telegram_error?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -236,37 +239,57 @@ export const createDeployment = createServerFn({ method: 'POST' })
         ...(platformTailscale && restoreHostname ? { tailscale_hostname: restoreHostname } : {}),
       }).eq('id', deployment.id);
 
-      // Auto-enable Funnel for platform-managed sync restores (do-restore path)
-      if (platformTailscale && restoreIp) {
-        // Fire-and-forget: don't block the deploy response. Poll will pick up status.
+      // Fire-and-forget post-restore tasks: model update then funnel setup.
+      // Sequenced to avoid concurrent SSH/restart conflicts. Funnel always runs regardless of model outcome.
+      const postRestoreTarget = restoreIp ?? restoreHostname;
+      if (platformModel || (platformTailscale && restoreIp)) {
         const cliEnv = buildCliBaseEnv();
-        supabase.from('deployments')
-          .update({ tailscale_setup_status: 'in_progress' }, { count: 'exact' })
-          .eq('id', deployment.id)
-          .eq('tailscale_setup_status', 'pending')
-          .then(async ({ count: claimed }) => {
-            if (!claimed || claimed === 0) return;
+        (async () => {
+          // Step 1: Update model if platform default is set
+          if (platformModel && postRestoreTarget) {
             try {
-              const funnelResult = await executeFunnelSetup({
-                ipAddress: restoreIp,
-                sandboxDir: result.sandboxDir,
-                cliEnv,
-                tailscaleHostname: restoreHostname ?? undefined,
-              });
-              const funnelUpdates: Record<string, unknown> = {
-                tailscale_setup_status: 'configured',
-                tailscale_configured: true,
-              };
-              if (funnelResult.funnelUrl) funnelUpdates.funnel_url = funnelResult.funnelUrl;
-              if (funnelResult.gatewayToken) funnelUpdates.gateway_token = funnelResult.gatewayToken;
-              if (funnelResult.deviceId) funnelUpdates.tailscale_device_id = funnelResult.deviceId;
-              await supabase.from('deployments').update(funnelUpdates).eq('id', deployment.id);
+              const modelResult = await retryCliCommand(
+                ['update-model', '--instance', postRestoreTarget, '--primary-model', toCliModel(platformModel)],
+                { sandboxDir: result.sandboxDir, env: cliEnv, timeoutMs: 2 * 60_000 },
+                { label: 'postRestore:update-model' },
+              );
+              if (modelResult.code !== 0) {
+                console.error('[createDeployment] Post-restore update-model failed:', modelResult.stderr);
+              }
             } catch (err) {
-              console.error('[createDeployment] Sync restore auto-funnel failed:', err);
-              await supabase.from('deployments').update({ tailscale_setup_status: 'failed' }).eq('id', deployment.id);
+              console.error('[createDeployment] Post-restore update-model error:', err);
             }
-          })
-          .then(() => {}, (err: unknown) => console.error('[createDeployment] Funnel claim failed:', err));
+          }
+
+          // Step 2: Funnel setup (always runs, not blocked by model update)
+          if (platformTailscale && restoreIp) {
+            const { count: claimed } = await supabase.from('deployments')
+              .update({ tailscale_setup_status: 'in_progress' }, { count: 'exact' })
+              .eq('id', deployment.id)
+              .eq('tailscale_setup_status', 'pending');
+            if (claimed && claimed > 0) {
+              try {
+                const funnelResult = await executeFunnelSetup({
+                  ipAddress: restoreIp,
+                  sandboxDir: result.sandboxDir,
+                  cliEnv,
+                  tailscaleHostname: restoreHostname ?? undefined,
+                });
+                const funnelUpdates: Record<string, unknown> = {
+                  tailscale_setup_status: 'configured',
+                  tailscale_configured: true,
+                };
+                if (funnelResult.funnelUrl) funnelUpdates.funnel_url = funnelResult.funnelUrl;
+                if (funnelResult.gatewayToken) funnelUpdates.gateway_token = funnelResult.gatewayToken;
+                if (funnelResult.deviceId) funnelUpdates.tailscale_device_id = funnelResult.deviceId;
+                await supabase.from('deployments').update(funnelUpdates).eq('id', deployment.id);
+              } catch (err) {
+                console.error('[createDeployment] Sync restore auto-funnel failed:', err);
+                await supabase.from('deployments').update({ tailscale_setup_status: 'failed' }).eq('id', deployment.id);
+              }
+            }
+          }
+        })().catch((err) => console.error('[createDeployment] Post-restore tasks failed:', err));
       }
     } else {
       // Fresh deploy via clawmacdo CLI
@@ -284,7 +307,7 @@ export const createDeployment = createServerFn({ method: 'POST' })
         '--json',
       ];
       if (platformModel) {
-        cliArgs.push('--primary-model', platformModel);
+        cliArgs.push('--primary-model', toCliModel(platformModel));
       }
 
       const userKeys = await getDecryptedUserApiKeys(user.id, supabase);
@@ -696,6 +719,38 @@ export const destroyDeployment = createServerFn({ method: 'POST' })
     return { success: true };
   });
 
+/** Retry a CLI command with exponential backoff on SSH connection errors.
+ *  Newly provisioned droplets need time for SSH to become available (~30-90s after creation). */
+export async function retryCliCommand(
+  args: string[],
+  opts: import('./clawmacdo').ExecOptions,
+  config?: { maxRetries?: number; baseDelayMs?: number; label?: string },
+): Promise<import('./clawmacdo').CliResult> {
+  const { execClawmacdo } = await import('./clawmacdo');
+  const maxRetries = config?.maxRetries ?? 5;
+  const baseDelay = config?.baseDelayMs ?? 10_000;
+  const label = config?.label ?? 'retryCliCommand';
+  let lastResult: import('./clawmacdo').CliResult | undefined;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (attempt > 0) {
+      const delay = baseDelay * Math.pow(2, attempt - 1);
+      console.log(`[${label}] SSH not ready, retrying in ${delay / 1000}s (attempt ${attempt + 1}/${maxRetries + 1})`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+
+    lastResult = await execClawmacdo(args, opts);
+    if (lastResult.code === 0) return lastResult;
+
+    // Only retry on SSH connection errors
+    if (!/Connection refused|Connection reset|No route to host|timed out/i.test(lastResult.stderr ?? '')) {
+      return lastResult; // Non-SSH error — don't retry
+    }
+  }
+
+  return lastResult!;
+}
+
 /** Shared helper: run tailscale-funnel CLI and parse output. Used by toggleFunnel and auto-funnel triggers. */
 async function executeFunnelSetup(opts: {
   ipAddress: string;
@@ -703,41 +758,17 @@ async function executeFunnelSetup(opts: {
   cliEnv: Record<string, string>;
   tailscaleHostname?: string;
 }): Promise<{ funnelUrl?: string; gatewayToken?: string; deviceId?: string }> {
-  const { execClawmacdo } = await import('./clawmacdo');
   const { createTenantAuthKey, findDeviceByHostname } = await import('./tailscale-api');
 
   // Generate a fresh auth key (safe even if device is already connected — clawmacdo skips connect step)
   const tsKey = await createTenantAuthKey('platform-funnel-setup');
   const env = { ...opts.cliEnv, TAILSCALE_AUTH_KEY: tsKey };
 
-  // Retry with backoff: newly provisioned droplets need time for SSH to become available.
-  // DigitalOcean assigns the IP before sshd starts (~30-90s after creation).
-  const MAX_RETRIES = 5;
-  const BASE_DELAY_MS = 10_000; // 10s, 20s, 40s, 80s, 160s
-  let lastResult;
-
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    if (attempt > 0) {
-      const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1);
-      console.log(`[executeFunnelSetup] SSH not ready, retrying in ${delay / 1000}s (attempt ${attempt + 1}/${MAX_RETRIES + 1})`);
-      await new Promise((r) => setTimeout(r, delay));
-    }
-
-    lastResult = await execClawmacdo(
-      ['tailscale-funnel', '--instance', opts.ipAddress],
-      { sandboxDir: opts.sandboxDir, env, timeoutMs: 5 * 60_000 },
-    );
-
-    if (lastResult.code === 0) break;
-
-    // Only retry on SSH connection errors (newly provisioned droplet not ready yet)
-    const isConnectionRefused = /Connection refused|Connection reset|No route to host|timed out/i.test(
-      lastResult.stderr,
-    );
-    if (!isConnectionRefused) break; // Non-SSH error — don't retry
-  }
-
-  const result = lastResult!;
+  const result = await retryCliCommand(
+    ['tailscale-funnel', '--instance', opts.ipAddress],
+    { sandboxDir: opts.sandboxDir, env, timeoutMs: 5 * 60_000 },
+    { label: 'executeFunnelSetup' },
+  );
   if (result.code !== 0) {
     throw new Error(result.stderr || 'Tailscale Funnel setup failed');
   }
@@ -1216,7 +1247,28 @@ export const updateDeploymentAfterRestore = createServerFn({ method: 'POST' })
       .eq('id', deploymentId)
       .eq('user_id', user.id);
 
-    // Auto-enable Funnel for platform-managed snapshot restores
+    // Post-restore tasks: model update then funnel setup (sequenced)
+    const platformModel = process.env.PLATFORM_DEFAULT_MODEL || null;
+    const postRestoreTarget = ip ?? hostname;
+    const cliEnv = buildCliBaseEnv();
+
+    // Step 1: Update model if platform default is set
+    if (platformModel && postRestoreTarget) {
+      try {
+        const modelResult = await retryCliCommand(
+          ['update-model', '--instance', postRestoreTarget, '--primary-model', toCliModel(platformModel)],
+          { sandboxDir: dep?.sandbox_dir ?? undefined, env: cliEnv, timeoutMs: 2 * 60_000 },
+          { label: 'updateDeploymentAfterRestore:update-model' },
+        );
+        if (modelResult.code !== 0) {
+          console.error('[updateDeploymentAfterRestore] update-model failed:', modelResult.stderr);
+        }
+      } catch (err) {
+        console.error('[updateDeploymentAfterRestore] update-model error:', err);
+      }
+    }
+
+    // Step 2: Auto-enable Funnel for platform-managed snapshot restores (always runs, not blocked by model update)
     if (dep?.tailscale_managed && dep.tailscale_setup_status === 'pending' && ip) {
       const { count: funnelClaim } = await supabase
         .from('deployments')
@@ -1226,7 +1278,6 @@ export const updateDeploymentAfterRestore = createServerFn({ method: 'POST' })
 
       if (funnelClaim && funnelClaim > 0) {
         try {
-          const cliEnv = buildCliBaseEnv();
           const funnelResult = await executeFunnelSetup({
             ipAddress: ip,
             sandboxDir: dep.sandbox_dir ?? undefined,
@@ -1267,6 +1318,207 @@ export const clearActiveOperation = createServerFn({ method: 'POST' })
     }
 
     await query;
+
+    return { success: true };
+  });
+
+/** Set up Telegram bot on a deployed instance */
+export const telegramSetup = createServerFn({ method: 'POST' })
+  .inputValidator((data: { deploymentId: string; botToken: string }) => data)
+  .handler(async (ctx) => {
+    const { execClawmacdo } = await import('./clawmacdo');
+    const { supabase, user } = await getAuthenticatedClient();
+
+    const { data: deployment } = await supabase
+      .from('deployments')
+      .select('*')
+      .eq('id', ctx.data.deploymentId)
+      .eq('user_id', user.id)
+      .maybeSingle();
+
+    if (!deployment) throw new Response('Not found', { status: 404 });
+    const dep = deployment as Deployment;
+
+    if (dep.status !== 'running') {
+      throw new Error('Telegram can only be set up on a running deployment.');
+    }
+
+    const instance = dep.cli_deploy_id ?? dep.ip_address;
+    if (!instance) {
+      throw new Error('No instance identifier available. Deployment may still be provisioning.');
+    }
+
+    // CAS lock: allow re-setup from any state except 'paired' (already connected)
+    // and 'pairing' (pairing in progress — brief window)
+    const { count: claimed } = await supabase
+      .from('deployments')
+      .update({ telegram_status: 'setting_up', telegram_error: null }, { count: 'exact' })
+      .eq('id', dep.id)
+      .neq('telegram_status', 'paired')
+      .neq('telegram_status', 'pairing');
+
+    if (!claimed || claimed === 0) {
+      // Could be null (neq doesn't match null) — try again for null specifically
+      const { count: claimedNull } = await supabase
+        .from('deployments')
+        .update({ telegram_status: 'setting_up', telegram_error: null }, { count: 'exact' })
+        .eq('id', dep.id)
+        .is('telegram_status', null);
+
+      if (!claimedNull || claimedNull === 0) {
+        throw new Error('Telegram is already paired or pairing is in progress.');
+      }
+    }
+
+    const botToken = ctx.data.botToken.trim();
+    const sanitize = (s: string) => s.replaceAll(botToken, '[REDACTED]');
+
+    // Validate bot token format before any external calls
+    if (!/^\d{8,10}:[A-Za-z0-9_-]{35}$/.test(botToken)) {
+      await supabase.from('deployments').update({ telegram_status: null, telegram_error: null }).eq('id', dep.id);
+      throw new Error('Invalid bot token format. Expected format: 123456789:ABCdef...');
+    }
+
+    // Verify token with Telegram API and get bot username
+    let botUsername: string;
+    try {
+      const meRes = await fetch(`https://api.telegram.org/bot${botToken}/getMe`);
+      const meData = await meRes.json() as { ok: boolean; result?: { username?: string } };
+      if (!meData.ok || !meData.result?.username) {
+        await supabase.from('deployments').update({ telegram_status: null, telegram_error: null }).eq('id', dep.id);
+        throw new Error('Invalid bot token. Please check your token from @BotFather.');
+      }
+      botUsername = meData.result.username;
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('Invalid bot token')) throw err;
+      await supabase.from('deployments').update({ telegram_status: null, telegram_error: null }).eq('id', dep.id);
+      throw new Error('Could not verify bot token. Please check your internet connection and try again.');
+    }
+
+    // Run CLI
+    const cliEnv = buildCliBaseEnv();
+    let result: Awaited<ReturnType<typeof execClawmacdo>>;
+    try {
+      result = await execClawmacdo(
+        ['telegram-setup', '--instance', instance, '--bot-token', botToken],
+        { sandboxDir: dep.sandbox_dir ?? undefined, env: cliEnv, timeoutMs: 120_000 },
+      );
+    } catch (err) {
+      await supabase.from('deployments')
+        .update({ telegram_status: 'failed', telegram_error: 'Setup failed unexpectedly.' })
+        .eq('id', dep.id);
+      throw new Error(sanitize(String(err)));
+    }
+
+    // Log full CLI output for debugging
+    if (result.stdout) console.log('[telegramSetup] CLI stdout:', sanitize(result.stdout));
+    if (result.stderr) console.error('[telegramSetup] CLI stderr:', sanitize(result.stderr));
+
+    if (result.code !== 0) {
+      // Timeout (code 124) but setup may have completed — check stdout for success indicator
+      const setupCompleted = result.stdout.includes('Telegram bot configured');
+      if (result.code === 124 && setupCompleted) {
+        console.log('[telegramSetup] CLI timed out but setup completed successfully');
+        // Fall through to success path
+      } else {
+        const userMsg = result.code === 124
+          ? 'Setup timed out. The instance may be slow to respond.'
+          : 'Telegram setup failed. Please check that the instance is reachable.';
+        await supabase.from('deployments')
+          .update({ telegram_status: 'failed', telegram_error: userMsg })
+          .eq('id', dep.id);
+        throw new Error(sanitize(result.stderr) || userMsg);
+      }
+    }
+
+    // Check CLI stdout for signs of failure (CLI uses || true so exit code is always 0)
+    const stdout = result.stdout.toLowerCase();
+    const setupFailed = stdout.includes('no deploy record found') ||
+      stdout.includes('connection refused') ||
+      stdout.includes('permission denied') ||
+      stdout.includes('host key verification failed');
+
+    if (setupFailed) {
+      const userMsg = 'Telegram setup could not reach the instance. Please verify the deployment is running.';
+      console.error('[telegramSetup] Setup likely failed despite exit code 0:', sanitize(result.stdout));
+      await supabase.from('deployments')
+        .update({ telegram_status: 'failed', telegram_error: userMsg })
+        .eq('id', dep.id);
+      throw new Error(userMsg);
+    }
+
+    await supabase.from('deployments')
+      .update({ telegram_status: 'awaiting_pairing', telegram_bot_username: botUsername })
+      .eq('id', dep.id);
+
+    return { success: true, botUsername };
+  });
+
+/** Approve a Telegram pairing code on a deployed instance */
+export const telegramPair = createServerFn({ method: 'POST' })
+  .inputValidator((data: { deploymentId: string; code: string }) => data)
+  .handler(async (ctx) => {
+    const { execClawmacdo } = await import('./clawmacdo');
+    const { supabase, user } = await getAuthenticatedClient();
+
+    const { data: deployment } = await supabase
+      .from('deployments')
+      .select('*')
+      .eq('id', ctx.data.deploymentId)
+      .eq('user_id', user.id)
+      .maybeSingle();
+
+    if (!deployment) throw new Response('Not found', { status: 404 });
+    const dep = deployment as Deployment;
+
+    // Validate code format
+    const code = ctx.data.code.trim().toUpperCase();
+    if (code.length !== 8 || !/^[A-Z0-9]+$/.test(code)) {
+      throw new Error('Invalid pairing code. Must be 8 alphanumeric characters.');
+    }
+
+    const instance = dep.cli_deploy_id ?? dep.ip_address;
+    if (!instance) {
+      throw new Error('No instance identifier available.');
+    }
+
+    // CAS lock: only proceed if awaiting_pairing
+    const { count: claimed } = await supabase
+      .from('deployments')
+      .update({ telegram_status: 'pairing', telegram_error: null }, { count: 'exact' })
+      .eq('id', dep.id)
+      .eq('telegram_status', 'awaiting_pairing');
+
+    if (!claimed || claimed === 0) {
+      throw new Error('Telegram is not ready for pairing.');
+    }
+
+    const cliEnv = buildCliBaseEnv();
+    let result: Awaited<ReturnType<typeof execClawmacdo>>;
+    try {
+      result = await execClawmacdo(
+        ['telegram-pair', '--instance', instance, '--code', code],
+        { sandboxDir: dep.sandbox_dir ?? undefined, env: cliEnv, timeoutMs: 30_000 },
+      );
+    } catch (err) {
+      await supabase.from('deployments')
+        .update({ telegram_status: 'awaiting_pairing', telegram_error: 'Pairing failed unexpectedly.' })
+        .eq('id', dep.id);
+      throw new Error(String(err));
+    }
+
+    if (result.code !== 0) {
+      const userMsg = 'Pairing failed. Please check the code and try again.';
+      if (result.stderr) console.error('[telegramPair] CLI stderr:', result.stderr);
+      await supabase.from('deployments')
+        .update({ telegram_status: 'awaiting_pairing', telegram_error: userMsg })
+        .eq('id', dep.id);
+      throw new Error(userMsg);
+    }
+
+    await supabase.from('deployments')
+      .update({ telegram_status: 'paired', telegram_error: null })
+      .eq('id', dep.id);
 
     return { success: true };
   });

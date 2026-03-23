@@ -95,3 +95,15 @@ export function validateProvider(provider: string): boolean {
 export function validateModel(model: string): boolean {
   return (MODELS as readonly string[]).includes(model);
 }
+
+const CLI_MODEL_MAP: Record<string, string> = {
+  'byteplus-arkmodel': 'byteplus',
+};
+
+/** Map a platform model identifier to the CLI model identifier clawmacdo expects. */
+export function toCliModel(platformModel: string): string {
+  if (!validateModel(platformModel)) {
+    throw new Error(`Unknown model: "${platformModel}". Valid models: ${MODELS.join(', ')}`);
+  }
+  return CLI_MODEL_MAP[platformModel] ?? platformModel;
+}

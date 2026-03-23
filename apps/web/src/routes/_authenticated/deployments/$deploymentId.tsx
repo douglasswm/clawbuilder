@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { getDeploymentDetail, pollDeploymentStatus, destroyDeployment, toggleFunnel, isTailscaleAvailable, getOperationSteps, clearActiveOperation, TERMINAL_STATUSES } from '../../../lib/server/deployments';
+import { TelegramConnectDialog } from '../../../components/telegram-connect-dialog';
 import { StatusBadge } from '../../../components/status-badge';
 import { OperationProgressBar } from '../../../components/operation-progress-bar';
 import { Progress } from '@workspace/ui/components/progress';
@@ -39,6 +40,7 @@ function DeploymentDetailPage() {
   const [snapshotName, setSnapshotName] = useState('');
   const [operationStartedAt, setOperationStartedAt] = useState<number | null>(null);
   const [lastOpSteps, setLastOpSteps] = useState<Array<{ label: string; status: string; started_at: string }>>([]);
+  const [showTelegramDialog, setShowTelegramDialog] = useState(false);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isMounted = useRef(true);
 
@@ -265,6 +267,7 @@ function DeploymentDetailPage() {
   const canDestroy = !['destroyed', 'destroying'].includes(deployment.status);
   const showFunnelCard = deployment.status === 'running';
   const showSnapshotCard = deployment.status === 'running' && deployment.provider === 'digitalocean';
+  const showTelegramCard = deployment.status === 'running';
 
   return (
     <div className="p-6 space-y-6 max-w-2xl">
@@ -350,7 +353,7 @@ function DeploymentDetailPage() {
       </div>
 
       {/* 4. ACTIONS — side-by-side on desktop */}
-      {(showSnapshotCard || showFunnelCard) && (
+      {(showSnapshotCard || showFunnelCard || showTelegramCard) && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* Snapshot Card */}
           {showSnapshotCard && !hasActiveOperation && (
@@ -553,8 +556,38 @@ function DeploymentDetailPage() {
               )}
             </div>
           )}
+
+          {/* Telegram Card */}
+          {showTelegramCard && (
+            <div className="rounded-lg border p-4 space-y-3">
+              <p className="text-sm font-medium">Telegram</p>
+              {deployment.telegram_status === 'paired' ? (
+                <p className="text-xs text-green-600">Connected and paired</p>
+              ) : (
+                <>
+                  <p className="text-xs text-muted-foreground">
+                    Connect a Telegram bot to chat with your agent.
+                  </p>
+                  <Button size="sm" onClick={() => setShowTelegramDialog(true)}>
+                    {deployment.telegram_status ? 'Continue Setup' : 'Connect Telegram'}
+                  </Button>
+                </>
+              )}
+            </div>
+          )}
         </div>
       )}
+
+      {/* Telegram Connect Dialog */}
+      <TelegramConnectDialog
+        open={showTelegramDialog}
+        onOpenChange={setShowTelegramDialog}
+        deploymentId={deploymentId}
+        telegramStatus={deployment.telegram_status}
+        telegramBotUsername={deployment.telegram_bot_username}
+        telegramError={deployment.telegram_error}
+        onStatusChange={loadDeployment}
+      />
 
       {/* 5. LAST OPERATION */}
       {lastOpSteps.length > 0 && (
