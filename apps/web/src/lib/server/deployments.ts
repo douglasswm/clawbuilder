@@ -11,6 +11,10 @@ export function buildCliBaseEnv(): Record<string, string> {
   if (doToken) env['DO_TOKEN'] = doToken;
   const byteplusKey = process.env.BYTEPLUS_ARKMODEL_API_KEY;
   if (byteplusKey) env['BYTEPLUS_ARK_API_KEY'] = byteplusKey;
+  const skillsApiUrl = process.env.SKILLS_API_URL;
+  if (skillsApiUrl) env['SKILLS_API_URL'] = skillsApiUrl;
+  const skillsApiKey = process.env.USER_SKILLS_API_KEY;
+  if (skillsApiKey) env['USER_SKILLS_API_KEY'] = skillsApiKey;
   // Tailscale auth key is intentionally NOT included here.
   // Each user must provide their own key for network isolation — see toggleFunnel().
   return env;
@@ -250,7 +254,7 @@ export const createDeployment = createServerFn({ method: 'POST' })
             try {
               const modelResult = await retryCliCommand(
                 ['update-model', '--instance', postRestoreTarget, '--primary-model', toCliModel(platformModel)],
-                { sandboxDir: result.sandboxDir, env: cliEnv, timeoutMs: 2 * 60_000 },
+                { sandboxDir: result.sandboxDir, env: cliEnv, timeoutMs: 5 * 60_000 },
                 { label: 'postRestore:update-model' },
               );
               if (modelResult.code !== 0) {
@@ -521,7 +525,7 @@ export const pollDeploymentStatus = createServerFn({ method: 'POST' })
 
       if (count && count > 0) {
         const pushResult = await execClawmacdo(
-          ['skill', 'push', '--slug', dep.persona_slug, '--name', dep.name],
+          ['skill-push', '--instance', dep.name],
           { sandboxDir: dep.sandbox_dir ?? undefined, env: cliEnv }
         );
         if (pushResult.code !== 0) {
@@ -1260,7 +1264,7 @@ export const updateDeploymentAfterRestore = createServerFn({ method: 'POST' })
           try {
             const modelResult = await retryCliCommand(
               ['update-model', '--instance', postRestoreTarget, '--primary-model', toCliModel(platformModel)],
-              { sandboxDir: dep?.sandbox_dir ?? undefined, env: cliEnv, timeoutMs: 2 * 60_000 },
+              { sandboxDir: dep?.sandbox_dir ?? undefined, env: cliEnv, timeoutMs: 5 * 60_000 },
               { label: 'updateDeploymentAfterRestore:update-model' },
             );
             if (modelResult.code !== 0) {
