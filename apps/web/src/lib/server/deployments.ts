@@ -1348,15 +1348,26 @@ export const telegramSetup = createServerFn({ method: 'POST' })
       throw new Error('No instance identifier available. Deployment may still be provisioning.');
     }
 
-    // CAS lock: allow setup from null, failed, or stuck setting_up states
+    // CAS lock: allow re-setup from any state except 'paired' (already connected)
+    // and 'pairing' (pairing in progress — brief window)
     const { count: claimed } = await supabase
       .from('deployments')
       .update({ telegram_status: 'setting_up', telegram_error: null }, { count: 'exact' })
       .eq('id', dep.id)
-      .or('telegram_status.is.null,telegram_status.eq.failed,telegram_status.eq.setting_up');
+      .neq('telegram_status', 'paired')
+      .neq('telegram_status', 'pairing');
 
     if (!claimed || claimed === 0) {
-      throw new Error('Telegram setup is already in progress. Please wait or refresh the page.');
+      // Could be null (neq doesn't match null) — try again for null specifically
+      const { count: claimedNull } = await supabase
+        .from('deployments')
+        .update({ telegram_status: 'setting_up', telegram_error: null }, { count: 'exact' })
+        .eq('id', dep.id)
+        .is('telegram_status', null);
+
+      if (!claimedNull || claimedNull === 0) {
+        throw new Error('Telegram is already paired or pairing is in progress.');
+      }
     }
 
     const botToken = ctx.data.botToken.trim();
