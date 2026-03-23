@@ -140,7 +140,7 @@ describe('buildCliBaseEnv', () => {
     process.env = { ...originalEnv, BYTEPLUS_ARKMODEL_API_KEY: 'bp-test-key-123' };
     delete process.env.DO_TOKEN;
     const result = buildCliBaseEnv();
-    expect(result).toEqual({ BYTEPLUS_ARKMODEL_API_KEY: 'bp-test-key-123' });
+    expect(result).toEqual({ BYTEPLUS_ARK_API_KEY: 'bp-test-key-123' });
   });
 
   it('omits BYTEPLUS_ARKMODEL_API_KEY when empty', () => {
@@ -154,7 +154,7 @@ describe('buildCliBaseEnv', () => {
     process.env = { ...originalEnv, DO_TOKEN: 'dop_v1_test123', BYTEPLUS_ARKMODEL_API_KEY: 'bp-test-key-123' };
     delete process.env.TAILSCALE_AUTH_KEY;
     const result = buildCliBaseEnv();
-    expect(result).toEqual({ DO_TOKEN: 'dop_v1_test123', BYTEPLUS_ARKMODEL_API_KEY: 'bp-test-key-123' });
+    expect(result).toEqual({ DO_TOKEN: 'dop_v1_test123', BYTEPLUS_ARK_API_KEY: 'bp-test-key-123' });
   });
 
   it('excludes TAILSCALE_AUTH_KEY even when env var is set (per-user only)', () => {
@@ -175,7 +175,7 @@ describe('buildCliBaseEnv', () => {
     const result = buildCliBaseEnv();
     expect(result).toEqual({
       DO_TOKEN: 'dop_v1_test123',
-      BYTEPLUS_ARKMODEL_API_KEY: 'bp-test-key-123',
+      BYTEPLUS_ARK_API_KEY: 'bp-test-key-123',
     });
   });
 });
