@@ -278,6 +278,7 @@ export const createDeployment = createServerFn({ method: 'POST' })
                   sandboxDir: result.sandboxDir,
                   cliEnv,
                   tailscaleHostname: restoreHostname ?? undefined,
+                  isSnapshotRestore: true,
                 });
                 const funnelUpdates: Record<string, unknown> = {
                   tailscale_setup_status: 'configured',
@@ -822,11 +823,15 @@ async function executeFunnelSetup(opts: {
   sandboxDir?: string;
   cliEnv: Record<string, string>;
   tailscaleHostname?: string;
+  isSnapshotRestore?: boolean;
 }): Promise<{ funnelUrl?: string; gatewayToken?: string; deviceId?: string }> {
   const { createTenantAuthKey, findDeviceByHostname } = await import('./tailscale-api');
 
-  // Reset Tailscale identity on snapshot-restored instances to prevent duplicate node keys
-  await resetTailscaleIdentity(opts.ipAddress, opts.sandboxDir);
+  // Reset Tailscale identity ONLY on snapshot restores to prevent duplicate node keys.
+  // Skip on manual funnel toggles and poll-triggered setups — those instances already have clean identities.
+  if (opts.isSnapshotRestore) {
+    await resetTailscaleIdentity(opts.ipAddress, opts.sandboxDir);
+  }
 
   // Generate a fresh auth key (safe even if device is already connected — clawmacdo skips connect step)
   const tsKey = await createTenantAuthKey('platform-funnel-setup');
@@ -1354,6 +1359,7 @@ export const updateDeploymentAfterRestore = createServerFn({ method: 'POST' })
                 sandboxDir: dep.sandbox_dir ?? undefined,
                 cliEnv,
                 tailscaleHostname: hostname ?? undefined,
+                isSnapshotRestore: true,
               });
               const funnelUpdates: Record<string, unknown> = {
                 tailscale_setup_status: 'configured',
