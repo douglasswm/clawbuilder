@@ -1,7 +1,7 @@
 import { createServerFn } from '@tanstack/react-start';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getAuthenticatedClient } from './auth-helpers';
-import { validateDeploymentName, validateRegion, validateSize, validateProvider, PROVIDER_LABELS } from '../validation';
+import { validateDeploymentName, validateRegion, validateSize, validateProvider, PROVIDER_LABELS, toCliModel } from '../validation';
 
 export const TERMINAL_STATUSES = new Set<Deployment['status']>(['running', 'failed', 'destroyed']);
 
@@ -10,7 +10,7 @@ export function buildCliBaseEnv(): Record<string, string> {
   const doToken = process.env.DO_TOKEN;
   if (doToken) env['DO_TOKEN'] = doToken;
   const byteplusKey = process.env.BYTEPLUS_ARKMODEL_API_KEY;
-  if (byteplusKey) env['BYTEPLUS_ARKMODEL_API_KEY'] = byteplusKey;
+  if (byteplusKey) env['BYTEPLUS_ARK_API_KEY'] = byteplusKey;
   // Tailscale auth key is intentionally NOT included here.
   // Each user must provide their own key for network isolation — see toggleFunnel().
   return env;
@@ -239,37 +239,57 @@ export const createDeployment = createServerFn({ method: 'POST' })
         ...(platformTailscale && restoreHostname ? { tailscale_hostname: restoreHostname } : {}),
       }).eq('id', deployment.id);
 
-      // Auto-enable Funnel for platform-managed sync restores (do-restore path)
-      if (platformTailscale && restoreIp) {
-        // Fire-and-forget: don't block the deploy response. Poll will pick up status.
+      // Fire-and-forget post-restore tasks: model update then funnel setup.
+      // Sequenced to avoid concurrent SSH/restart conflicts. Funnel always runs regardless of model outcome.
+      const postRestoreTarget = restoreIp ?? restoreHostname;
+      if (platformModel || (platformTailscale && restoreIp)) {
         const cliEnv = buildCliBaseEnv();
-        supabase.from('deployments')
-          .update({ tailscale_setup_status: 'in_progress' }, { count: 'exact' })
-          .eq('id', deployment.id)
-          .eq('tailscale_setup_status', 'pending')
-          .then(async ({ count: claimed }) => {
-            if (!claimed || claimed === 0) return;
+        (async () => {
+          // Step 1: Update model if platform default is set
+          if (platformModel && postRestoreTarget) {
             try {
-              const funnelResult = await executeFunnelSetup({
-                ipAddress: restoreIp,
-                sandboxDir: result.sandboxDir,
-                cliEnv,
-                tailscaleHostname: restoreHostname ?? undefined,
-              });
-              const funnelUpdates: Record<string, unknown> = {
-                tailscale_setup_status: 'configured',
-                tailscale_configured: true,
-              };
-              if (funnelResult.funnelUrl) funnelUpdates.funnel_url = funnelResult.funnelUrl;
-              if (funnelResult.gatewayToken) funnelUpdates.gateway_token = funnelResult.gatewayToken;
-              if (funnelResult.deviceId) funnelUpdates.tailscale_device_id = funnelResult.deviceId;
-              await supabase.from('deployments').update(funnelUpdates).eq('id', deployment.id);
+              const modelResult = await retryCliCommand(
+                ['update-model', '--instance', postRestoreTarget, '--primary-model', toCliModel(platformModel)],
+                { sandboxDir: result.sandboxDir, env: cliEnv, timeoutMs: 2 * 60_000 },
+                { label: 'postRestore:update-model' },
+              );
+              if (modelResult.code !== 0) {
+                console.error('[createDeployment] Post-restore update-model failed:', modelResult.stderr);
+              }
             } catch (err) {
-              console.error('[createDeployment] Sync restore auto-funnel failed:', err);
-              await supabase.from('deployments').update({ tailscale_setup_status: 'failed' }).eq('id', deployment.id);
+              console.error('[createDeployment] Post-restore update-model error:', err);
             }
-          })
-          .then(() => {}, (err: unknown) => console.error('[createDeployment] Funnel claim failed:', err));
+          }
+
+          // Step 2: Funnel setup (always runs, not blocked by model update)
+          if (platformTailscale && restoreIp) {
+            const { count: claimed } = await supabase.from('deployments')
+              .update({ tailscale_setup_status: 'in_progress' }, { count: 'exact' })
+              .eq('id', deployment.id)
+              .eq('tailscale_setup_status', 'pending');
+            if (claimed && claimed > 0) {
+              try {
+                const funnelResult = await executeFunnelSetup({
+                  ipAddress: restoreIp,
+                  sandboxDir: result.sandboxDir,
+                  cliEnv,
+                  tailscaleHostname: restoreHostname ?? undefined,
+                });
+                const funnelUpdates: Record<string, unknown> = {
+                  tailscale_setup_status: 'configured',
+                  tailscale_configured: true,
+                };
+                if (funnelResult.funnelUrl) funnelUpdates.funnel_url = funnelResult.funnelUrl;
+                if (funnelResult.gatewayToken) funnelUpdates.gateway_token = funnelResult.gatewayToken;
+                if (funnelResult.deviceId) funnelUpdates.tailscale_device_id = funnelResult.deviceId;
+                await supabase.from('deployments').update(funnelUpdates).eq('id', deployment.id);
+              } catch (err) {
+                console.error('[createDeployment] Sync restore auto-funnel failed:', err);
+                await supabase.from('deployments').update({ tailscale_setup_status: 'failed' }).eq('id', deployment.id);
+              }
+            }
+          }
+        })().catch((err) => console.error('[createDeployment] Post-restore tasks failed:', err));
       }
     } else {
       // Fresh deploy via clawmacdo CLI
@@ -287,7 +307,7 @@ export const createDeployment = createServerFn({ method: 'POST' })
         '--json',
       ];
       if (platformModel) {
-        cliArgs.push('--primary-model', platformModel);
+        cliArgs.push('--primary-model', toCliModel(platformModel));
       }
 
       const userKeys = await getDecryptedUserApiKeys(user.id, supabase);
@@ -699,6 +719,38 @@ export const destroyDeployment = createServerFn({ method: 'POST' })
     return { success: true };
   });
 
+/** Retry a CLI command with exponential backoff on SSH connection errors.
+ *  Newly provisioned droplets need time for SSH to become available (~30-90s after creation). */
+export async function retryCliCommand(
+  args: string[],
+  opts: import('./clawmacdo').ExecOptions,
+  config?: { maxRetries?: number; baseDelayMs?: number; label?: string },
+): Promise<import('./clawmacdo').CliResult> {
+  const { execClawmacdo } = await import('./clawmacdo');
+  const maxRetries = config?.maxRetries ?? 5;
+  const baseDelay = config?.baseDelayMs ?? 10_000;
+  const label = config?.label ?? 'retryCliCommand';
+  let lastResult: import('./clawmacdo').CliResult | undefined;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (attempt > 0) {
+      const delay = baseDelay * Math.pow(2, attempt - 1);
+      console.log(`[${label}] SSH not ready, retrying in ${delay / 1000}s (attempt ${attempt + 1}/${maxRetries + 1})`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+
+    lastResult = await execClawmacdo(args, opts);
+    if (lastResult.code === 0) return lastResult;
+
+    // Only retry on SSH connection errors
+    if (!/Connection refused|Connection reset|No route to host|timed out/i.test(lastResult.stderr ?? '')) {
+      return lastResult; // Non-SSH error — don't retry
+    }
+  }
+
+  return lastResult!;
+}
+
 /** Shared helper: run tailscale-funnel CLI and parse output. Used by toggleFunnel and auto-funnel triggers. */
 async function executeFunnelSetup(opts: {
   ipAddress: string;
@@ -706,41 +758,17 @@ async function executeFunnelSetup(opts: {
   cliEnv: Record<string, string>;
   tailscaleHostname?: string;
 }): Promise<{ funnelUrl?: string; gatewayToken?: string; deviceId?: string }> {
-  const { execClawmacdo } = await import('./clawmacdo');
   const { createTenantAuthKey, findDeviceByHostname } = await import('./tailscale-api');
 
   // Generate a fresh auth key (safe even if device is already connected — clawmacdo skips connect step)
   const tsKey = await createTenantAuthKey('platform-funnel-setup');
   const env = { ...opts.cliEnv, TAILSCALE_AUTH_KEY: tsKey };
 
-  // Retry with backoff: newly provisioned droplets need time for SSH to become available.
-  // DigitalOcean assigns the IP before sshd starts (~30-90s after creation).
-  const MAX_RETRIES = 5;
-  const BASE_DELAY_MS = 10_000; // 10s, 20s, 40s, 80s, 160s
-  let lastResult;
-
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    if (attempt > 0) {
-      const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1);
-      console.log(`[executeFunnelSetup] SSH not ready, retrying in ${delay / 1000}s (attempt ${attempt + 1}/${MAX_RETRIES + 1})`);
-      await new Promise((r) => setTimeout(r, delay));
-    }
-
-    lastResult = await execClawmacdo(
-      ['tailscale-funnel', '--instance', opts.ipAddress],
-      { sandboxDir: opts.sandboxDir, env, timeoutMs: 5 * 60_000 },
-    );
-
-    if (lastResult.code === 0) break;
-
-    // Only retry on SSH connection errors (newly provisioned droplet not ready yet)
-    const isConnectionRefused = /Connection refused|Connection reset|No route to host|timed out/i.test(
-      lastResult.stderr,
-    );
-    if (!isConnectionRefused) break; // Non-SSH error — don't retry
-  }
-
-  const result = lastResult!;
+  const result = await retryCliCommand(
+    ['tailscale-funnel', '--instance', opts.ipAddress],
+    { sandboxDir: opts.sandboxDir, env, timeoutMs: 5 * 60_000 },
+    { label: 'executeFunnelSetup' },
+  );
   if (result.code !== 0) {
     throw new Error(result.stderr || 'Tailscale Funnel setup failed');
   }
@@ -1219,7 +1247,28 @@ export const updateDeploymentAfterRestore = createServerFn({ method: 'POST' })
       .eq('id', deploymentId)
       .eq('user_id', user.id);
 
-    // Auto-enable Funnel for platform-managed snapshot restores
+    // Post-restore tasks: model update then funnel setup (sequenced)
+    const platformModel = process.env.PLATFORM_DEFAULT_MODEL || null;
+    const postRestoreTarget = ip ?? hostname;
+    const cliEnv = buildCliBaseEnv();
+
+    // Step 1: Update model if platform default is set
+    if (platformModel && postRestoreTarget) {
+      try {
+        const modelResult = await retryCliCommand(
+          ['update-model', '--instance', postRestoreTarget, '--primary-model', toCliModel(platformModel)],
+          { sandboxDir: dep?.sandbox_dir ?? undefined, env: cliEnv, timeoutMs: 2 * 60_000 },
+          { label: 'updateDeploymentAfterRestore:update-model' },
+        );
+        if (modelResult.code !== 0) {
+          console.error('[updateDeploymentAfterRestore] update-model failed:', modelResult.stderr);
+        }
+      } catch (err) {
+        console.error('[updateDeploymentAfterRestore] update-model error:', err);
+      }
+    }
+
+    // Step 2: Auto-enable Funnel for platform-managed snapshot restores (always runs, not blocked by model update)
     if (dep?.tailscale_managed && dep.tailscale_setup_status === 'pending' && ip) {
       const { count: funnelClaim } = await supabase
         .from('deployments')
@@ -1229,7 +1278,6 @@ export const updateDeploymentAfterRestore = createServerFn({ method: 'POST' })
 
       if (funnelClaim && funnelClaim > 0) {
         try {
-          const cliEnv = buildCliBaseEnv();
           const funnelResult = await executeFunnelSetup({
             ipAddress: ip,
             sandboxDir: dep.sandbox_dir ?? undefined,
@@ -1337,10 +1385,18 @@ export const telegramSetup = createServerFn({ method: 'POST' })
 
     // Run CLI
     const cliEnv = buildCliBaseEnv();
-    const result = await execClawmacdo(
-      ['telegram-setup', '--instance', instance, '--bot-token', botToken],
-      { sandboxDir: dep.sandbox_dir ?? undefined, env: cliEnv, timeoutMs: 60_000 },
-    );
+    let result: Awaited<ReturnType<typeof execClawmacdo>>;
+    try {
+      result = await execClawmacdo(
+        ['telegram-setup', '--instance', instance, '--bot-token', botToken],
+        { sandboxDir: dep.sandbox_dir ?? undefined, env: cliEnv, timeoutMs: 60_000 },
+      );
+    } catch (err) {
+      await supabase.from('deployments')
+        .update({ telegram_status: 'failed', telegram_error: 'Setup failed unexpectedly.' })
+        .eq('id', dep.id);
+      throw new Error(sanitize(String(err)));
+    }
 
     if (result.code !== 0) {
       const userMsg = result.code === 124
@@ -1399,10 +1455,18 @@ export const telegramPair = createServerFn({ method: 'POST' })
     }
 
     const cliEnv = buildCliBaseEnv();
-    const result = await execClawmacdo(
-      ['telegram-pair', '--instance', instance, '--code', code],
-      { sandboxDir: dep.sandbox_dir ?? undefined, env: cliEnv, timeoutMs: 30_000 },
-    );
+    let result: Awaited<ReturnType<typeof execClawmacdo>>;
+    try {
+      result = await execClawmacdo(
+        ['telegram-pair', '--instance', instance, '--code', code],
+        { sandboxDir: dep.sandbox_dir ?? undefined, env: cliEnv, timeoutMs: 30_000 },
+      );
+    } catch (err) {
+      await supabase.from('deployments')
+        .update({ telegram_status: 'awaiting_pairing', telegram_error: 'Pairing failed unexpectedly.' })
+        .eq('id', dep.id);
+      throw new Error(String(err));
+    }
 
     if (result.code !== 0) {
       const userMsg = 'Pairing failed. Please check the code and try again.';
