@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 const TIMEOUT_MS = 30_000;
 export const RESTORE_TIMEOUT_MS = 10 * 60_000; // 10 minutes for snapshot restores
 
-const REDACT_FLAGS = new Set(['--tailscale-auth-key', '--bot-token', '--byteplus-ark-api-key']);
+const REDACT_FLAGS = new Set(['--tailscale-auth-key', '--bot-token', '--byteplus-ark-api-key', '--api-key']);
 
 /** Redact sensitive CLI flag values for logging. Exported for testing. */
 export function redactArgs(args: string[]): string {

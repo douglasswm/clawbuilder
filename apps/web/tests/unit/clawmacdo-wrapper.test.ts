@@ -78,6 +78,13 @@ describe('redactArgs', () => {
     expect(result).not.toContain('bp-secret');
     expect(result.match(/\[REDACTED\]/g)?.length).toBe(2);
   });
+
+  it('redacts --api-key values (skills API key)', () => {
+    const result = redactArgs(['skill-push', '--instance', 'my-deploy', '--api-key', 'sk-secret-key']);
+    expect(result).toContain('[REDACTED]');
+    expect(result).not.toContain('sk-secret-key');
+    expect(result).toContain('my-deploy');
+  });
 });
 
 describe('parseNdjson', () => {
