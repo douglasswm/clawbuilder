@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.9.0] - 2026-03-27
+
+### Added
+- `SKILLS_API_URL` and `USER_SKILLS_API_KEY` environment variables forwarded to CLI commands for skills API integration
+- Test coverage for `buildCliBaseEnv` SKILLS env vars and `retryCliCommand` SSH error patterns (`No route to host`, `timed out`)
+- `--api-key` added to CLI argument redaction to prevent skills API key leakage in logs
+
+### Changed
+- `skill push --slug --name` replaced with `skill-push --instance` to match updated clawmacdo CLI
+
+### Fixed
+- Stale comment in warming-up banner said "3 minutes" but threshold was 5 minutes
+
 ## [0.2.8.0] - 2026-03-23
 
 ### Added
