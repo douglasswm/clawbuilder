@@ -455,7 +455,7 @@ function DeploymentDetailPage() {
                     {(() => {
                       const updatedAt = new Date(deployment.updated_at).getTime();
                       const ageMs = Date.now() - updatedAt;
-                      const isRecent = ageMs < 5 * 60 * 1000; // within 3 minutes
+                      const isRecent = ageMs < 5 * 60 * 1000; // within 5 minutes
                       return isRecent ? (
                         <div className="rounded-md border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950 px-3 py-2">
                           <p className="text-xs text-amber-800 dark:text-amber-200">
