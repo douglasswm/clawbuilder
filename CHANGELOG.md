@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.9.0] - 2026-03-27
+
+### Added
+- `SKILLS_API_URL` and `USER_SKILLS_API_KEY` environment variables forwarded to CLI commands for skills API integration
+- Test coverage for `buildCliBaseEnv` SKILLS env vars and `retryCliCommand` SSH error patterns (`No route to host`, `timed out`)
+- `--api-key` added to CLI argument redaction to prevent skills API key leakage in logs
+
+### Changed
+- `skill push --slug --name` replaced with `skill-push --instance` to match updated clawmacdo CLI
+
+### Fixed
+- Stale comment in warming-up banner said "3 minutes" but threshold was 5 minutes
+
+## [0.2.8.0] - 2026-03-23
+
+### Added
+- `retryCliCommand` helper — extracted retry-with-backoff pattern from `executeFunnelSetup` into a reusable, testable function (5 retries, exponential backoff, SSH error detection)
+- Post-restore model configuration for both inline `do-restore` and sidecar SSE restore paths — instances now receive the platform's default model after snapshot restore
+- `redactArgs` tests covering all sensitive CLI flags (tailscale-auth-key, bot-token, byteplus-ark-api-key)
+
+### Changed
+- Fresh deploy `--primary-model` flag now uses `toCliModel()` to translate platform model names to CLI model names (e.g., `byteplus-arkmodel` → `byteplus`)
+- Post-restore tasks (model update + funnel setup) are sequenced: model first, then funnel, with funnel always proceeding regardless of model outcome
+- `executeFunnelSetup` refactored to use `retryCliCommand` helper (behavior preserved, DRY)
+
+### Fixed
+- Snapshot-restored instances never received the platform's configured default model — `update-model` now fires after restore completes
+- Sidecar restore path (`updateDeploymentAfterRestore`) blocked HTTP response during model update retries — now fire-and-forget
+
 ## [0.2.7.0] - 2026-03-23
 
 ### Added

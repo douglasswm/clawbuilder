@@ -41,6 +41,8 @@ function DeploymentDetailPage() {
   const [operationStartedAt, setOperationStartedAt] = useState<number | null>(null);
   const [lastOpSteps, setLastOpSteps] = useState<Array<{ label: string; status: string; started_at: string }>>([]);
   const [showTelegramDialog, setShowTelegramDialog] = useState(false);
+  const [provisionElapsed, setProvisionElapsed] = useState(0);
+  const provisionStartRef = useRef<number | null>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isMounted = useRef(true);
 
@@ -136,6 +138,24 @@ function DeploymentDetailPage() {
       }
     };
   }, [loadDeployment, poll]);
+
+  // Elapsed time counter for provisioning
+  useEffect(() => {
+    const isProvisioning = deployment && !TERMINAL_STATUSES.has(deployment.status);
+    if (!isProvisioning) {
+      provisionStartRef.current = null;
+      return;
+    }
+    if (!provisionStartRef.current) {
+      provisionStartRef.current = Date.now();
+    }
+    const timer = setInterval(() => {
+      if (provisionStartRef.current && isMounted.current) {
+        setProvisionElapsed(Math.floor((Date.now() - provisionStartRef.current) / 1000));
+      }
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [deployment?.status]);
 
   // Load last operation steps
   useEffect(() => {
@@ -286,7 +306,7 @@ function DeploymentDetailPage() {
           <Button
             variant="outline"
             onClick={() => setShowDestroyConfirm(true)}
-            className="shrink-0 text-red-600 hover:text-red-700 border-red-200 hover:border-red-300"
+            className="shrink-0 text-destructive hover:text-red-700 border-red-200 hover:border-red-300"
           >
             Destroy
           </Button>
@@ -322,9 +342,23 @@ function DeploymentDetailPage() {
         <div className="space-y-2">
           <div className="flex justify-between text-sm">
             <span className="text-muted-foreground">{deployment.step_label ?? 'Provisioning...'}</span>
-            <span className="text-muted-foreground">{progressPercent}%</span>
+            <span className="text-muted-foreground">
+              {progressPercent}%
+              {provisionElapsed > 0 && (
+                <span className="ml-2">
+                  {provisionElapsed >= 60
+                    ? `${Math.floor(provisionElapsed / 60)}m ${provisionElapsed % 60}s`
+                    : `${provisionElapsed}s`}
+                </span>
+              )}
+            </span>
           </div>
           <Progress value={progressPercent} />
+          {deployment.current_step > 0 && deployment.total_steps > 0 && (
+            <p className="text-xs text-muted-foreground">
+              Step {deployment.current_step} of {deployment.total_steps}
+            </p>
+          )}
         </div>
       )}
 
@@ -396,12 +430,40 @@ function DeploymentDetailPage() {
                 deployment.tailscale_setup_status === 'pending' || deployment.tailscale_setup_status === 'in_progress' ? (
                   <div className="space-y-2">
                     <p className="text-xs text-muted-foreground">
-                      {deployment.tailscale_setup_status === 'pending' ? 'Waiting for Funnel setup...' : 'Setting up public access...'}
+                      {deployment.tailscale_setup_status === 'pending'
+                        ? 'Waiting for Funnel setup\u2026 This may take up to a minute.'
+                        : 'Setting up public access\u2026 Configuring HTTPS endpoint.'}
                     </p>
-                    <Progress value={deployment.tailscale_setup_status === 'in_progress' ? 50 : 10} />
+                    <div className="h-2 w-full bg-muted rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-primary rounded-full animate-pulse"
+                        style={{
+                          width: deployment.tailscale_setup_status === 'in_progress' ? '60%' : '30%',
+                          transition: 'width 2s ease-in-out',
+                        }}
+                      />
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {deployment.tailscale_setup_status === 'pending'
+                        ? 'Waiting for instance to become reachable\u2026'
+                        : 'Installing Tailscale and configuring Funnel\u2026'}
+                    </p>
                   </div>
                 ) : deployment.tailscale_setup_status === 'configured' && deployment.funnel_url ? (
                   <div className="space-y-3">
+                    {/* Show warming-up notice for recently configured funnels (gateway needs 1-2 min to boot) */}
+                    {(() => {
+                      const updatedAt = new Date(deployment.updated_at).getTime();
+                      const ageMs = Date.now() - updatedAt;
+                      const isRecent = ageMs < 5 * 60 * 1000; // within 5 minutes
+                      return isRecent ? (
+                        <div className="rounded-md border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950 px-3 py-2">
+                          <p className="text-xs text-amber-800 dark:text-amber-200">
+                            Your agent is starting up. It typically takes 3-5 minutes to come online.
+                          </p>
+                        </div>
+                      ) : null;
+                    })()}
                     <div>
                       <p className="text-xs text-muted-foreground">Public URL</p>
                       <a
@@ -484,6 +546,19 @@ function DeploymentDetailPage() {
                   </div>
                 ) : deployment.funnel_url ? (
                   <div className="space-y-3">
+                    {/* Show warming-up notice for recently configured funnels */}
+                    {(() => {
+                      const updatedAt = new Date(deployment.updated_at).getTime();
+                      const ageMs = Date.now() - updatedAt;
+                      const isRecent = ageMs < 5 * 60 * 1000;
+                      return isRecent ? (
+                        <div className="rounded-md border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950 px-3 py-2">
+                          <p className="text-xs text-amber-800 dark:text-amber-200">
+                            Your agent is starting up. It typically takes 3-5 minutes to come online.
+                          </p>
+                        </div>
+                      ) : null;
+                    })()}
                     <div>
                       <p className="text-xs text-muted-foreground">Public URL</p>
                       <a
@@ -656,7 +731,12 @@ function DeploymentDetailPage() {
               disabled={destroying}
               className="bg-red-600 hover:bg-red-700 text-white"
             >
-              {destroying ? 'Destroying...' : 'Destroy'}
+              {destroying ? (
+                <span className="flex items-center gap-2">
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                  Destroying...
+                </span>
+              ) : 'Destroy'}
             </Button>
           </DialogFooter>
         </DialogContent>

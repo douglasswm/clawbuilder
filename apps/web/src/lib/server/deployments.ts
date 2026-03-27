@@ -11,6 +11,10 @@ export function buildCliBaseEnv(): Record<string, string> {
   if (doToken) env['DO_TOKEN'] = doToken;
   const byteplusKey = process.env.BYTEPLUS_ARKMODEL_API_KEY;
   if (byteplusKey) env['BYTEPLUS_ARK_API_KEY'] = byteplusKey;
+  const skillsApiUrl = process.env.SKILLS_API_URL;
+  if (skillsApiUrl) env['SKILLS_API_URL'] = skillsApiUrl;
+  const skillsApiKey = process.env.USER_SKILLS_API_KEY;
+  if (skillsApiKey) env['USER_SKILLS_API_KEY'] = skillsApiKey;
   // Tailscale auth key is intentionally NOT included here.
   // Each user must provide their own key for network isolation — see toggleFunnel().
   return env;
@@ -250,7 +254,7 @@ export const createDeployment = createServerFn({ method: 'POST' })
             try {
               const modelResult = await retryCliCommand(
                 ['update-model', '--instance', postRestoreTarget, '--primary-model', toCliModel(platformModel)],
-                { sandboxDir: result.sandboxDir, env: cliEnv, timeoutMs: 2 * 60_000 },
+                { sandboxDir: result.sandboxDir, env: cliEnv, timeoutMs: 5 * 60_000 },
                 { label: 'postRestore:update-model' },
               );
               if (modelResult.code !== 0) {
@@ -274,6 +278,7 @@ export const createDeployment = createServerFn({ method: 'POST' })
                   sandboxDir: result.sandboxDir,
                   cliEnv,
                   tailscaleHostname: restoreHostname ?? undefined,
+                  isSnapshotRestore: true,
                 });
                 const funnelUpdates: Record<string, unknown> = {
                   tailscale_setup_status: 'configured',
@@ -521,7 +526,7 @@ export const pollDeploymentStatus = createServerFn({ method: 'POST' })
 
       if (count && count > 0) {
         const pushResult = await execClawmacdo(
-          ['skill', 'push', '--slug', dep.persona_slug, '--name', dep.name],
+          ['skill-push', '--instance', dep.name],
           { sandboxDir: dep.sandbox_dir ?? undefined, env: cliEnv }
         );
         if (pushResult.code !== 0) {
@@ -751,14 +756,82 @@ export async function retryCliCommand(
   return lastResult!;
 }
 
+/** Reset Tailscale identity on a snapshot-restored instance to prevent duplicate node keys.
+ *  Snapshot-restored instances boot with the original Tailscale node key baked in.
+ *  Stops tailscaled, removes the state file containing the old node key, and restarts
+ *  the service so tailscale-funnel can do a clean `tailscale up` with a fresh identity. */
+async function resetTailscaleIdentity(ipAddress: string, sandboxDir?: string): Promise<void> {
+  if (!sandboxDir) return;
+  const { readdirSync } = await import('node:fs');
+  const { spawn } = await import('node:child_process');
+
+  // Find the SSH key in the sandbox
+  const keysDir = `${sandboxDir}/.clawmacdo/keys`;
+  let keyPath: string | null = null;
+  try {
+    const files = readdirSync(keysDir).filter((f: string) => f.startsWith('clawmacdo_') && !f.endsWith('.pub'));
+    if (files.length > 0) keyPath = `${keysDir}/${files[0]}`;
+  } catch {
+    console.log('[resetTailscaleIdentity] No SSH keys found in sandbox, skipping');
+    return;
+  }
+  if (!keyPath) return;
+
+  // Stop tailscaled, remove old state (node key + machine key), restart.
+  // This is more surgical than `tailscale logout` which can leave the service in a broken state.
+  const resetCmd = [
+    'if command -v tailscale > /dev/null 2>&1; then',
+    '  systemctl stop tailscaled 2>/dev/null || true;',
+    '  rm -f /var/lib/tailscale/tailscaled.state 2>/dev/null || true;',
+    '  systemctl start tailscaled 2>/dev/null || true;',
+    '  sleep 2;',
+    '  echo "TAILSCALE_RESET_OK";',
+    'else',
+    '  echo "TAILSCALE_NOT_INSTALLED";',
+    'fi',
+  ].join(' ');
+
+  return new Promise((resolve) => {
+    const proc = spawn('ssh', [
+      '-o', 'StrictHostKeyChecking=no',
+      '-o', 'ConnectTimeout=30',
+      '-o', 'BatchMode=yes',
+      '-i', keyPath!,
+      `root@${ipAddress}`,
+      resetCmd,
+    ], { shell: false, timeout: 60_000 });
+
+    let stdout = '';
+    proc.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+
+    proc.on('close', (code) => {
+      const status = stdout.includes('TAILSCALE_RESET_OK') ? 'reset' :
+                     stdout.includes('TAILSCALE_NOT_INSTALLED') ? 'not installed' : `exit ${code}`;
+      console.log(`[resetTailscaleIdentity] ${ipAddress}: ${status}`);
+      resolve();
+    });
+    proc.on('error', (err) => {
+      console.log(`[resetTailscaleIdentity] SSH failed (non-fatal): ${err.message}`);
+      resolve(); // Non-fatal — tailscale-funnel will handle installation
+    });
+  });
+}
+
 /** Shared helper: run tailscale-funnel CLI and parse output. Used by toggleFunnel and auto-funnel triggers. */
 async function executeFunnelSetup(opts: {
   ipAddress: string;
   sandboxDir?: string;
   cliEnv: Record<string, string>;
   tailscaleHostname?: string;
+  isSnapshotRestore?: boolean;
 }): Promise<{ funnelUrl?: string; gatewayToken?: string; deviceId?: string }> {
   const { createTenantAuthKey, findDeviceByHostname } = await import('./tailscale-api');
+
+  // Reset Tailscale identity ONLY on snapshot restores to prevent duplicate node keys.
+  // Skip on manual funnel toggles and poll-triggered setups — those instances already have clean identities.
+  if (opts.isSnapshotRestore) {
+    await resetTailscaleIdentity(opts.ipAddress, opts.sandboxDir);
+  }
 
   // Generate a fresh auth key (safe even if device is already connected — clawmacdo skips connect step)
   const tsKey = await createTenantAuthKey('platform-funnel-setup');
@@ -1247,56 +1320,62 @@ export const updateDeploymentAfterRestore = createServerFn({ method: 'POST' })
       .eq('id', deploymentId)
       .eq('user_id', user.id);
 
-    // Post-restore tasks: model update then funnel setup (sequenced)
+    // Fire-and-forget post-restore tasks: model update then funnel setup.
+    // Sequenced to avoid concurrent SSH/restart conflicts. Funnel always runs regardless of model outcome.
     const platformModel = process.env.PLATFORM_DEFAULT_MODEL || null;
     const postRestoreTarget = ip ?? hostname;
-    const cliEnv = buildCliBaseEnv();
 
-    // Step 1: Update model if platform default is set
-    if (platformModel && postRestoreTarget) {
-      try {
-        const modelResult = await retryCliCommand(
-          ['update-model', '--instance', postRestoreTarget, '--primary-model', toCliModel(platformModel)],
-          { sandboxDir: dep?.sandbox_dir ?? undefined, env: cliEnv, timeoutMs: 2 * 60_000 },
-          { label: 'updateDeploymentAfterRestore:update-model' },
-        );
-        if (modelResult.code !== 0) {
-          console.error('[updateDeploymentAfterRestore] update-model failed:', modelResult.stderr);
+    if (platformModel || (dep?.tailscale_managed && dep.tailscale_setup_status === 'pending' && ip)) {
+      const cliEnv = buildCliBaseEnv();
+      (async () => {
+        // Step 1: Update model if platform default is set
+        if (platformModel && postRestoreTarget) {
+          try {
+            const modelResult = await retryCliCommand(
+              ['update-model', '--instance', postRestoreTarget, '--primary-model', toCliModel(platformModel)],
+              { sandboxDir: dep?.sandbox_dir ?? undefined, env: cliEnv, timeoutMs: 5 * 60_000 },
+              { label: 'updateDeploymentAfterRestore:update-model' },
+            );
+            if (modelResult.code !== 0) {
+              console.error('[updateDeploymentAfterRestore] update-model failed:', modelResult.stderr);
+            }
+          } catch (err) {
+            console.error('[updateDeploymentAfterRestore] update-model error:', err);
+          }
         }
-      } catch (err) {
-        console.error('[updateDeploymentAfterRestore] update-model error:', err);
-      }
-    }
 
-    // Step 2: Auto-enable Funnel for platform-managed snapshot restores (always runs, not blocked by model update)
-    if (dep?.tailscale_managed && dep.tailscale_setup_status === 'pending' && ip) {
-      const { count: funnelClaim } = await supabase
-        .from('deployments')
-        .update({ tailscale_setup_status: 'in_progress' }, { count: 'exact' })
-        .eq('id', deploymentId)
-        .eq('tailscale_setup_status', 'pending');
+        // Step 2: Auto-enable Funnel for platform-managed snapshot restores (always runs, not blocked by model update)
+        if (dep?.tailscale_managed && dep.tailscale_setup_status === 'pending' && ip) {
+          const { count: funnelClaim } = await supabase
+            .from('deployments')
+            .update({ tailscale_setup_status: 'in_progress' }, { count: 'exact' })
+            .eq('id', deploymentId)
+            .eq('tailscale_setup_status', 'pending');
 
-      if (funnelClaim && funnelClaim > 0) {
-        try {
-          const funnelResult = await executeFunnelSetup({
-            ipAddress: ip,
-            sandboxDir: dep.sandbox_dir ?? undefined,
-            cliEnv,
-            tailscaleHostname: hostname ?? undefined,
-          });
-          const funnelUpdates: Record<string, unknown> = {
-            tailscale_setup_status: 'configured',
-            tailscale_configured: true,
-          };
-          if (funnelResult.funnelUrl) funnelUpdates.funnel_url = funnelResult.funnelUrl;
-          if (funnelResult.gatewayToken) funnelUpdates.gateway_token = funnelResult.gatewayToken;
-          if (funnelResult.deviceId) funnelUpdates.tailscale_device_id = funnelResult.deviceId;
-          await supabase.from('deployments').update(funnelUpdates).eq('id', deploymentId);
-        } catch (err) {
-          console.error('[updateDeploymentAfterRestore] Auto-funnel failed:', err);
-          await supabase.from('deployments').update({ tailscale_setup_status: 'failed' }).eq('id', deploymentId);
+          if (funnelClaim && funnelClaim > 0) {
+            try {
+              const funnelResult = await executeFunnelSetup({
+                ipAddress: ip,
+                sandboxDir: dep.sandbox_dir ?? undefined,
+                cliEnv,
+                tailscaleHostname: hostname ?? undefined,
+                isSnapshotRestore: true,
+              });
+              const funnelUpdates: Record<string, unknown> = {
+                tailscale_setup_status: 'configured',
+                tailscale_configured: true,
+              };
+              if (funnelResult.funnelUrl) funnelUpdates.funnel_url = funnelResult.funnelUrl;
+              if (funnelResult.gatewayToken) funnelUpdates.gateway_token = funnelResult.gatewayToken;
+              if (funnelResult.deviceId) funnelUpdates.tailscale_device_id = funnelResult.deviceId;
+              await supabase.from('deployments').update(funnelUpdates).eq('id', deploymentId);
+            } catch (err) {
+              console.error('[updateDeploymentAfterRestore] Auto-funnel failed:', err);
+              await supabase.from('deployments').update({ tailscale_setup_status: 'failed' }).eq('id', deploymentId);
+            }
+          }
         }
-      }
+      })().catch((err) => console.error('[updateDeploymentAfterRestore] Post-restore tasks failed:', err));
     }
 
     return { success: true };
